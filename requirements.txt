@@ -1,0 +1,26 @@
+# Padel Analyzer - Core dependencies
+# Computer Vision and Video Processing
+opencv-python>=4.8.0
+opencv-contrib-python>=4.8.0
+
+# Deep Learning (for models to be implemented)
+# Users can choose their preferred framework:
+# torch>=2.0.0  # Uncomment for PyTorch-based models
+# tensorflow>=2.13.0  # Uncomment for TensorFlow-based models
+
+# Image Processing
+numpy>=1.24.0
+Pillow>=10.0.0
+
+# Video I/O
+imageio>=2.31.0
+imageio-ffmpeg>=0.4.9
+
+# Utilities
+pyyaml>=6.0
+tqdm>=4.65.0
+
+# Future ML/AI dependencies (to be added as needed):
+# ultralytics  # For YOLO models
+# transformers  # For vision transformers or LLMs
+# supervision  # For tracking utilities

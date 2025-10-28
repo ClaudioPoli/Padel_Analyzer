@@ -1,0 +1,27 @@
+{
+  "video": {
+    "supported_formats": [".mp4", ".mov", ".avi", ".mkv"],
+    "target_fps": null,
+    "target_resolution": null
+  },
+  "tracking": {
+    "player_detection_confidence": 0.5,
+    "ball_detection_confidence": 0.3,
+    "max_tracking_distance": 100,
+    "interpolate_missing": true,
+    "max_interpolation_gap": 5
+  },
+  "field_detection": {
+    "line_detection_threshold": 100,
+    "corner_detection_tolerance": 10,
+    "use_homography": true,
+    "auto_calibrate": true
+  },
+  "model": {
+    "player_model": "yolov8n",
+    "ball_model": "custom_ball_detector",
+    "field_model": "segmentation_model",
+    "device": "cpu",
+    "batch_size": 1
+  }
+}
