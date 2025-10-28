@@ -1,6 +1,13 @@
 # folders
 data
 
+# Model files (downloaded by ultralytics)
+*.pt
+*.pth
+*.onnx
+*.engine
+*.tflite
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

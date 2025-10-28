@@ -99,6 +99,20 @@ print(f"Players tracked: {len(results['player_tracks'])}")
 print(f"Ball positions: {len(results['ball_tracks']['positions'])}")
 ```
 
+### Running the Demo
+
+To test the implementation with a synthetic video:
+
+```bash
+python examples/demo_processing.py
+```
+
+Or with your own video:
+
+```bash
+python examples/demo_processing.py path/to/your/video.mp4
+```
+
 ### Custom Configuration
 
 ```python
@@ -166,49 +180,62 @@ See `config.example.json` for a complete configuration example.
 ✅ Core module architecture  
 ✅ Configuration system  
 ✅ Basic testing framework  
+✅ **Video loading with OpenCV (MP4, MOV, AVI, MKV)**  
+✅ **Field detection using Hough Transform**  
+✅ **Player tracking with YOLOv8**  
+✅ **Ball tracking with YOLO + traditional CV fallback**  
+✅ **Cross-platform device detection (CUDA/MPS/CPU)**  
 
 ### Planned Features
 
 #### Short-term
-- [ ] Implement video loading with OpenCV
-- [ ] Integrate object detection models (YOLO/Faster R-CNN)
-- [ ] Implement basic player tracking
-- [ ] Implement ball detection and tracking
-- [ ] Add field line detection using Hough transform
+- [ ] Fine-tune models for padel-specific detection
+- [ ] Improve player re-identification
+- [ ] Enhanced trajectory prediction
+- [ ] Better team assignment algorithms
+- [ ] Performance optimization and caching
 
 #### Medium-term
-- [ ] Fine-tune models for padel-specific detection
-- [ ] Implement player re-identification
-- [ ] Add trajectory prediction
-- [ ] Team assignment based on position/appearance
-- [ ] Performance metrics and analytics
+- [ ] Action recognition (serves, volleys, smashes)
+- [ ] Game statistics extraction
+- [ ] Point tracking and scoring
+- [ ] Player heatmaps
+- [ ] Shot type classification
 
 #### Long-term
 - [ ] Real-time video analysis
-- [ ] Action recognition (serves, volleys, smashes)
-- [ ] Game statistics extraction
 - [ ] Multi-camera support
 - [ ] Web interface for visualization
 - [ ] Integration with LLMs for match commentary
+- [ ] Advanced analytics dashboard
 
 ## Model Selection
 
-The project is designed to support multiple model backends:
+The project currently uses **YOLOv8** as the primary detection framework:
 
 ### Player Tracking
-- **YOLO (v5/v8)**: Fast and accurate object detection
-- **Faster R-CNN**: High accuracy for player detection
-- **DeepSORT/ByteTrack**: Robust multi-object tracking
+- **YOLOv8 (Ultralytics)**: Fast and accurate person detection with built-in tracking
+- **Pre-trained on COCO dataset**: Works zero-shot without fine-tuning
+- **Cross-platform**: Supports CUDA (Windows/Linux), MPS (Apple Silicon), and CPU
 
 ### Ball Tracking
-- **Custom CNN**: Trained specifically for ball detection
-- **TrackNetV2**: Specialized for ball tracking in sports
-- **Temporal models**: Using frame sequences for better accuracy
+- **Primary**: YOLOv8 sports ball detection (COCO class 32)
+- **Fallback**: Hough Circle Transform for traditional CV-based detection
+- **Trajectory interpolation**: Scipy-based smoothing for missed frames
 
 ### Field Detection
-- **Semantic Segmentation**: For court area identification
-- **Hough Transform**: For line detection
-- **Template Matching**: For known court layouts
+- **Hough Line Transform**: For court line detection
+- **Canny Edge Detection**: Preprocessing for line detection
+- **Homography Estimation**: For perspective correction and top-down view
+- **Future**: Semantic segmentation models for more robust court detection
+
+### Device Support
+Automatic detection of best available device:
+- **CUDA**: NVIDIA GPUs on Windows/Linux
+- **MPS**: Apple Silicon GPUs on macOS
+- **CPU**: Fallback for systems without GPU
+
+See `IMPLEMENTATION.md` for detailed technical documentation.
 
 ## Testing
 
