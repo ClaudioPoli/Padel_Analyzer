@@ -57,21 +57,25 @@ class PadelAnalyzer:
         # Load video
         video_data = self.video_loader.load(video_path)
         
-        # Detect field
-        field_info = self.field_detector.detect(video_data)
-        
-        # Track players
-        player_tracks = self.player_tracker.track(video_data, field_info)
-        
-        # Track ball
-        ball_tracks = self.ball_tracker.track(video_data, field_info)
-        
-        return {
-            "field_info": field_info,
-            "player_tracks": player_tracks,
-            "ball_tracks": ball_tracks,
-            "metadata": video_data.get("metadata", {})
-        }
+        try:
+            # Detect field
+            field_info = self.field_detector.detect(video_data)
+            
+            # Track players
+            player_tracks = self.player_tracker.track(video_data, field_info)
+            
+            # Track ball
+            ball_tracks = self.ball_tracker.track(video_data, field_info)
+            
+            return {
+                "field_info": field_info,
+                "player_tracks": player_tracks,
+                "ball_tracks": ball_tracks,
+                "metadata": video_data.get("metadata", {})
+            }
+        finally:
+            # Clean up video resources
+            self.video_loader.release(video_data)
     
     def analyze_video_batch(self, video_paths: List[str]) -> List[Dict[str, Any]]:
         """

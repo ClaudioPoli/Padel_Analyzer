@@ -41,7 +41,7 @@ class ModelConfig:
     player_model: str = "yolov8n"  # Model name or path
     ball_model: str = "custom_ball_detector"  # Model name or path
     field_model: str = "segmentation_model"  # Model name or path
-    device: str = "cpu"  # "cpu" or "cuda"
+    device: str = "auto"  # "auto", "cpu", "cuda", or "mps"
     batch_size: int = 1
 
 

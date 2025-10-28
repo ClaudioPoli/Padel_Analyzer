@@ -43,7 +43,7 @@ class TestConfig:
         """Test ModelConfig default values."""
         config = Config()
         
-        assert config.model.device == "cpu"
+        assert config.model.device == "auto"
         assert config.model.batch_size == 1
     
     def test_save_and_load_config(self):

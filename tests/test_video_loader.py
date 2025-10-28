@@ -53,21 +53,17 @@ class TestVideoLoader:
             temp_path.unlink()
     
     def test_load_supported_format_structure(self):
-        """Test that load returns correct structure for supported format."""
+        """Test that load raises ValueError for invalid video files."""
         config = Config()
         loader = VideoLoader(config)
         
-        # Create a temporary file with supported extension
+        # Create a temporary file with supported extension but invalid content
         with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as f:
             temp_path = Path(f.name)
         
         try:
-            result = loader.load(temp_path)
-            
-            assert "path" in result
-            assert "format" in result
-            assert "metadata" in result
-            assert "frames" in result
-            assert result["format"] == ".mp4"
+            # Should raise ValueError because file is not a valid video
+            with pytest.raises(ValueError, match="Failed to open video file"):
+                loader.load(temp_path)
         finally:
             temp_path.unlink()
