@@ -3,7 +3,7 @@ Configuration management for the Padel Analyzer.
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List, Tuple
 import json
 from pathlib import Path
 
@@ -11,9 +11,9 @@ from pathlib import Path
 @dataclass
 class VideoConfig:
     """Video processing configuration."""
-    supported_formats: list = field(default_factory=lambda: ['.mp4', '.mov', '.avi', '.mkv'])
+    supported_formats: List[str] = field(default_factory=lambda: ['.mp4', '.mov', '.avi', '.mkv'])
     target_fps: Optional[int] = None  # If None, use original FPS
-    target_resolution: Optional[tuple] = None  # (width, height), if None, use original
+    target_resolution: Optional[Tuple[int, int]] = None  # (width, height), if None, use original
 
 
 @dataclass

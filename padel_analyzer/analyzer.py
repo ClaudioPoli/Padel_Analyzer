@@ -3,7 +3,7 @@ Main analyzer module that orchestrates the video analysis pipeline.
 """
 
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from .video.video_loader import VideoLoader
 from .tracking.player_tracker import PlayerTracker
@@ -73,7 +73,7 @@ class PadelAnalyzer:
             "metadata": video_data.get("metadata", {})
         }
     
-    def analyze_video_batch(self, video_paths: list[str]) -> list[Dict[str, Any]]:
+    def analyze_video_batch(self, video_paths: List[str]) -> List[Dict[str, Any]]:
         """
         Analyze multiple padel match videos.
         
