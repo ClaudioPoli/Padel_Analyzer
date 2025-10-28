@@ -212,8 +212,10 @@ def main():
             print(f"Error: Video file not found: {video_path}")
             sys.exit(1)
     else:
-        # Create synthetic video for testing
-        video_path = Path("/tmp/test_padel_video.mp4")
+        # Create synthetic video for testing in a temporary directory
+        import tempfile
+        temp_dir = Path(tempfile.gettempdir())
+        video_path = temp_dir / "test_padel_video.mp4"
         create_synthetic_video(video_path, duration_seconds=3, fps=30)
     
     # Test analysis
