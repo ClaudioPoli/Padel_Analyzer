@@ -142,13 +142,18 @@ class PlayerTracker:
             return []
         
         try:
-            # Run YOLO detection
+            # Run YOLO detection with lower confidence for better recall
+            # Use a lower threshold than config to catch more players initially
+            min_conf = min(0.25, self.config.tracking.player_detection_confidence)
+            
             results = self.model.track(
                 frame, 
                 persist=True,
                 classes=[0],  # 0 = person in COCO dataset
-                conf=self.config.tracking.player_detection_confidence,
-                verbose=False
+                conf=min_conf,
+                verbose=False,
+                iou=0.5,  # IoU threshold for NMS
+                max_det=10  # Maximum detections per frame
             )
             
             detections = []
@@ -171,13 +176,29 @@ class PlayerTracker:
                     center_x = int((x1 + x2) / 2)
                     center_y = int((y1 + y2) / 2)
                     
-                    # Filter by court mask if provided
+                    # Calculate bottom center (feet position) which is more reliable for court filtering
+                    bottom_center_x = int((x1 + x2) / 2)
+                    bottom_center_y = int(y2)  # Bottom of bounding box
+                    
+                    # Filter by court mask if provided - use bottom center (feet) instead of bbox center
+                    # Also expand the mask slightly to avoid cutting off players at boundaries
                     if field_mask is not None:
                         h, w = field_mask.shape
-                        if 0 <= center_y < h and 0 <= center_x < w:
-                            if field_mask[center_y, center_x] == 0:
-                                # Detection outside court, skip
-                                continue
+                        # Check if feet position is within expanded court area
+                        if 0 <= bottom_center_y < h and 0 <= bottom_center_x < w:
+                            # Don't filter out if feet are on or near the court
+                            # Only filter if clearly outside (allowing 20px margin for error)
+                            margin = 20
+                            if field_mask[bottom_center_y, bottom_center_x] == 0:
+                                # Check surrounding area (margin) before filtering
+                                y_min = max(0, bottom_center_y - margin)
+                                y_max = min(h, bottom_center_y + margin)
+                                x_min = max(0, bottom_center_x - margin)
+                                x_max = min(w, bottom_center_x + margin)
+                                
+                                # If no part of the margin area is on court, skip
+                                if np.sum(field_mask[y_min:y_max, x_min:x_max]) == 0:
+                                    continue
                     
                     detections.append({
                         "frame_number": frame_number,
@@ -227,7 +248,8 @@ class PlayerTracker:
             tracks_dict[track_id]["frame_numbers"].append(detection["frame_number"])
         
         # Convert to list format and filter short tracks
-        min_track_length = 10  # Minimum frames for a valid track
+        # Use a shorter minimum to catch players who appear briefly
+        min_track_length = 5  # Reduced from 10 to catch more players
         player_tracks = []
         
         for track_id, track_data in tracks_dict.items():

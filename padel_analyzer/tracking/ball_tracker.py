@@ -164,7 +164,7 @@ class BallTracker:
         field_mask: Optional[np.ndarray] = None
     ) -> Optional[Tuple[int, int, float]]:
         """
-        Detect the ball in a single frame.
+        Detect the ball in a single frame using multiple strategies.
         
         Args:
             frame: Video frame to process
@@ -173,12 +173,29 @@ class BallTracker:
         Returns:
             Tuple of (x, y, confidence) if ball detected, None otherwise
         """
+        detections = []
+        
         # Try model-based detection first
         if self.model is not None:
-            return self._detect_ball_with_model(frame, field_mask)
+            model_detection = self._detect_ball_with_model(frame, field_mask)
+            if model_detection is not None:
+                detections.append(model_detection)
         
-        # Fallback to traditional CV methods
-        return self._detect_ball_traditional(frame, field_mask)
+        # Also try traditional CV methods
+        traditional_detection = self._detect_ball_traditional(frame, field_mask)
+        if traditional_detection is not None:
+            detections.append(traditional_detection)
+        
+        # Try color-based detection for yellow balls
+        color_detection = self._detect_ball_by_color(frame, field_mask)
+        if color_detection is not None:
+            detections.append(color_detection)
+        
+        # Return the detection with highest confidence
+        if len(detections) > 0:
+            return max(detections, key=lambda d: d[2])
+        
+        return None
     
     def _detect_ball_with_model(
         self, 
@@ -196,16 +213,21 @@ class BallTracker:
             Ball position and confidence or None
         """
         try:
+            # Use very low confidence threshold to catch more balls
+            # We'll use multiple filtering strategies later
+            min_conf = min(0.15, self.config.tracking.ball_detection_confidence)
+            
             # Run detection with sports ball class (class 32 in COCO)
             results = self.model(
                 frame,
                 classes=[32],  # sports ball
-                conf=self.config.tracking.ball_detection_confidence,
-                verbose=False
+                conf=min_conf,
+                verbose=False,
+                iou=0.3,  # Lower IoU for overlapping detections
+                max_det=5  # Allow multiple ball candidates
             )
             
-            best_detection = None
-            best_confidence = 0.0
+            candidates = []
             
             for result in results:
                 boxes = result.boxes
@@ -220,6 +242,11 @@ class BallTracker:
                     center_x = int((x1 + x2) / 2)
                     center_y = int((y1 + y2) / 2)
                     
+                    # Calculate size
+                    width = x2 - x1
+                    height = y2 - y1
+                    area = width * height
+                    
                     # Filter by court mask
                     if field_mask is not None:
                         h, w = field_mask.shape
@@ -227,12 +254,18 @@ class BallTracker:
                             if field_mask[center_y, center_x] == 0:
                                 continue
                     
-                    # Keep best detection
-                    if confidence > best_confidence:
-                        best_confidence = confidence
-                        best_detection = (center_x, center_y, confidence)
+                    # Prefer smaller detections (balls are small)
+                    # Adjust confidence based on size
+                    size_factor = 1.0 / (1.0 + area / 500.0)
+                    adjusted_conf = confidence * (0.5 + 0.5 * size_factor)
+                    
+                    candidates.append((center_x, center_y, adjusted_conf))
             
-            return best_detection
+            # Return best candidate
+            if len(candidates) > 0:
+                return max(candidates, key=lambda c: c[2])
+            
+            return None
             
         except Exception as e:
             logger.warning(f"Error in model-based ball detection: {e}")
@@ -256,11 +289,28 @@ class BallTracker:
         # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # Apply Gaussian blur
+        # Apply Gaussian blur to reduce noise
         blurred = cv2.GaussianBlur(gray, (9, 9), 2)
         
-        # Detect circles using Hough Circle Transform
-        circles = cv2.HoughCircles(
+        # Try multiple parameter sets for better detection
+        circles_list = []
+        
+        # Parameter set 1: More sensitive
+        circles1 = cv2.HoughCircles(
+            blurred,
+            cv2.HOUGH_GRADIENT,
+            dp=1.2,
+            minDist=15,
+            param1=40,
+            param2=20,
+            minRadius=3,
+            maxRadius=25
+        )
+        if circles1 is not None:
+            circles_list.extend(circles1[0])
+        
+        # Parameter set 2: Less sensitive
+        circles2 = cv2.HoughCircles(
             blurred,
             cv2.HOUGH_GRADIENT,
             dp=1,
@@ -270,18 +320,25 @@ class BallTracker:
             minRadius=5,
             maxRadius=30
         )
+        if circles2 is not None:
+            circles_list.extend(circles2[0])
         
-        if circles is None:
+        if len(circles_list) == 0:
             return None
         
-        circles = np.uint16(np.around(circles))
+        circles_list = np.array(circles_list)
         
-        # Find best circle (consider brightness and position)
+        # Find best circle based on multiple factors
         best_circle = None
         best_score = 0.0
         
-        for circle in circles[0, :]:
+        for circle in circles_list:
             x, y, r = circle
+            x, y, r = int(x), int(y), int(r)
+            
+            # Check if within frame bounds
+            if x < r or y < r or x >= frame.shape[1] - r or y >= frame.shape[0] - r:
+                continue
             
             # Check if within court mask
             if field_mask is not None:
@@ -290,14 +347,28 @@ class BallTracker:
                     if field_mask[y, x] == 0:
                         continue
             
-            # Score based on brightness (balls are usually bright)
+            # Calculate score based on brightness, size, and color
             if 0 <= y < gray.shape[0] and 0 <= x < gray.shape[1]:
+                # Get region of interest
+                roi_y1, roi_y2 = max(0, y-r), min(gray.shape[0], y+r)
+                roi_x1, roi_x2 = max(0, x-r), min(gray.shape[1], x+r)
+                
+                # Brightness score
                 brightness = float(gray[y, x]) / 255.0
-                score = brightness * (1.0 / max(r, 1))  # Prefer smaller, brighter circles
+                
+                # Check if it's a bright object (balls are usually bright)
+                if brightness < 0.3:
+                    continue
+                
+                # Size score (prefer smaller circles for ball)
+                size_score = 1.0 / (1.0 + r / 10.0)
+                
+                # Combined score
+                score = brightness * size_score
                 
                 if score > best_score:
                     best_score = score
-                    best_circle = (int(x), int(y), min(score, 1.0))
+                    best_circle = (x, y, min(score, 1.0))
         
         return best_circle
     
@@ -400,3 +471,104 @@ class BallTracker:
             in_play.append(speed > threshold)
         
         return in_play
+    
+    def _detect_ball_by_color(
+        self, 
+        frame: np.ndarray, 
+        field_mask: Optional[np.ndarray] = None
+    ) -> Optional[Tuple[int, int, float]]:
+        """
+        Detect ball using color-based segmentation.
+        Looks for yellow/green (typical padel ball colors) or bright white objects.
+        
+        Args:
+            frame: Video frame
+            field_mask: Optional court mask
+            
+        Returns:
+            Ball position and confidence or None
+        """
+        # Convert to HSV for better color detection
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        
+        # Define color ranges for typical padel balls
+        # Yellow-green ball (most common)
+        lower_yellow = np.array([20, 80, 80])
+        upper_yellow = np.array([45, 255, 255])
+        
+        # Bright yellow
+        lower_bright_yellow = np.array([15, 100, 150])
+        upper_bright_yellow = np.array([35, 255, 255])
+        
+        # White/bright ball (alternative)
+        lower_white = np.array([0, 0, 200])
+        upper_white = np.array([180, 30, 255])
+        
+        # Create masks for each color range
+        mask_yellow = cv2.inRange(hsv, lower_yellow, upper_yellow)
+        mask_bright = cv2.inRange(hsv, lower_bright_yellow, upper_bright_yellow)
+        mask_white = cv2.inRange(hsv, lower_white, upper_white)
+        
+        # Combine masks
+        combined_mask = cv2.bitwise_or(mask_yellow, mask_bright)
+        combined_mask = cv2.bitwise_or(combined_mask, mask_white)
+        
+        # Apply field mask if provided
+        if field_mask is not None:
+            combined_mask = cv2.bitwise_and(combined_mask, field_mask)
+        
+        # Apply morphological operations to reduce noise
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+        combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_OPEN, kernel)
+        combined_mask = cv2.morphologyEx(combined_mask, cv2.MORPH_CLOSE, kernel)
+        
+        # Find contours
+        contours, _ = cv2.findContours(combined_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if len(contours) == 0:
+            return None
+        
+        # Find best contour (circular, small, bright)
+        best_ball = None
+        best_score = 0.0
+        
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            
+            # Filter by size (ball should be small but visible)
+            if area < 20 or area > 2000:
+                continue
+            
+            # Calculate circularity
+            perimeter = cv2.arcLength(contour, True)
+            if perimeter == 0:
+                continue
+            
+            circularity = 4 * np.pi * area / (perimeter * perimeter)
+            
+            # Ball should be reasonably circular
+            if circularity < 0.4:
+                continue
+            
+            # Get centroid
+            M = cv2.moments(contour)
+            if M["m00"] == 0:
+                continue
+            
+            cx = int(M["m10"] / M["m00"])
+            cy = int(M["m01"] / M["m00"])
+            
+            # Check bounds
+            if cx < 0 or cy < 0 or cx >= frame.shape[1] or cy >= frame.shape[0]:
+                continue
+            
+            # Calculate score based on circularity and size
+            # Prefer smaller, more circular objects
+            size_score = 1.0 / (1.0 + area / 100.0)
+            score = circularity * size_score
+            
+            if score > best_score:
+                best_score = score
+                best_ball = (cx, cy, min(score, 1.0))
+        
+        return best_ball
