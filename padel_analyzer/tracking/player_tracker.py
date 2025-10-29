@@ -144,7 +144,7 @@ class PlayerTracker:
         try:
             # Run YOLO detection with lower confidence for better recall
             # Use a lower threshold than config to catch more players initially
-            min_conf = min(0.25, self.config.tracking.player_detection_confidence)
+            min_conf = min(0.2, self.config.tracking.player_detection_confidence)
             
             results = self.model.track(
                 frame, 
@@ -152,8 +152,9 @@ class PlayerTracker:
                 classes=[0],  # 0 = person in COCO dataset
                 conf=min_conf,
                 verbose=False,
-                iou=0.5,  # IoU threshold for NMS
-                max_det=10  # Maximum detections per frame
+                iou=0.4,  # Lower IoU threshold to avoid merging nearby players
+                max_det=15,  # Increased to catch all players + some margin
+                tracker="bytetrack.yaml"  # Use ByteTrack for better multi-object tracking
             )
             
             detections = []
@@ -180,24 +181,28 @@ class PlayerTracker:
                     bottom_center_x = int((x1 + x2) / 2)
                     bottom_center_y = int(y2)  # Bottom of bounding box
                     
-                    # Filter by court mask if provided - use bottom center (feet) instead of bbox center
-                    # Also expand the mask slightly to avoid cutting off players at boundaries
+                    # More lenient filtering for field mask
+                    # Only filter if clearly outside court (e.g., spectators in stands)
+                    # For padel, players can be near walls/glass, so be very permissive
                     if field_mask is not None:
                         h, w = field_mask.shape
+                        # Allow very generous margin - 50px for players near boundaries
+                        margin = 50
+                        
                         # Check if feet position is within expanded court area
                         if 0 <= bottom_center_y < h and 0 <= bottom_center_x < w:
-                            # Don't filter out if feet are on or near the court
-                            # Only filter if clearly outside (allowing 20px margin for error)
-                            margin = 20
-                            if field_mask[bottom_center_y, bottom_center_x] == 0:
-                                # Check surrounding area (margin) before filtering
-                                y_min = max(0, bottom_center_y - margin)
-                                y_max = min(h, bottom_center_y + margin)
-                                x_min = max(0, bottom_center_x - margin)
-                                x_max = min(w, bottom_center_x + margin)
-                                
-                                # If no part of the margin area is on court, skip
-                                if np.sum(field_mask[y_min:y_max, x_min:x_max]) == 0:
+                            # Check surrounding area before filtering
+                            y_min = max(0, bottom_center_y - margin)
+                            y_max = min(h, bottom_center_y + margin)
+                            x_min = max(0, bottom_center_x - margin)
+                            x_max = min(w, bottom_center_x + margin)
+                            
+                            # Only filter if NO part of the margin area is on court
+                            # This is very permissive to avoid losing players
+                            if np.sum(field_mask[y_min:y_max, x_min:x_max]) == 0:
+                                # Additional check: if confidence is high, keep it anyway
+                                # (might be a player outside court temporarily)
+                                if confidence < 0.6:
                                     continue
                     
                     detections.append({
@@ -248,15 +253,15 @@ class PlayerTracker:
             tracks_dict[track_id]["frame_numbers"].append(detection["frame_number"])
         
         # Convert to list format and filter short tracks
-        # Use a shorter minimum to catch players who appear briefly
-        min_track_length = 5  # Reduced from 10 to catch more players
-        player_tracks = []
+        # Use a very short minimum to catch all 4 players even if briefly visible
+        min_track_length = 3  # Very low to ensure we catch all players
+        all_tracks = []
         
         for track_id, track_data in tracks_dict.items():
             if len(track_data["positions"]) < min_track_length:
                 continue
             
-            player_tracks.append({
+            all_tracks.append({
                 "player_id": track_id,
                 "positions": track_data["positions"],
                 "bounding_boxes": track_data["bounding_boxes"],
@@ -264,6 +269,27 @@ class PlayerTracker:
                 "frame_numbers": track_data["frame_numbers"],
                 "team": None  # To be assigned later
             })
+        
+        # For padel doubles, we expect 4 players
+        # Keep the 4 tracks with highest coverage/consistency
+        # Sort by number of frames (coverage) and keep top 4
+        if len(all_tracks) > 4:
+            # Score tracks by coverage and average confidence
+            scored_tracks = []
+            for track in all_tracks:
+                coverage_score = len(track["positions"])
+                avg_conf = np.mean(track["confidence_scores"]) if track["confidence_scores"] else 0
+                # Combined score: prioritize coverage, but consider confidence
+                score = coverage_score * 0.8 + avg_conf * coverage_score * 0.2
+                scored_tracks.append((track, score))
+            
+            # Sort by score and keep top 4
+            scored_tracks.sort(key=lambda x: x[1], reverse=True)
+            player_tracks = [track for track, score in scored_tracks[:4]]
+            
+            logger.info(f"Filtered {len(all_tracks)} tracks down to top 4 players")
+        else:
+            player_tracks = all_tracks
         
         # Assign teams based on court position
         if len(player_tracks) >= 2:
@@ -278,6 +304,8 @@ class PlayerTracker:
     ) -> List[Dict[str, Any]]:
         """
         Assign players to teams based on their positions on the court.
+        For padel: court is divided by a net in the middle (horizontally).
+        Two players on each side of the net form a team.
         
         Args:
             player_tracks: List of player tracking data
@@ -286,28 +314,65 @@ class PlayerTracker:
         Returns:
             Updated player tracks with team assignments
         """
-        # Simple heuristic: divide court in half and assign teams
-        # Calculate average y-position for each player
-        
+        # Calculate average y-position for each player to determine which side of net
         player_avg_positions = []
         for track in player_tracks:
             positions = track["positions"]
             if len(positions) == 0:
                 continue
             
-            avg_y = np.mean([pos[1] for pos in positions])
-            player_avg_positions.append((track["player_id"], avg_y))
+            # Use median y-position (more robust to outliers)
+            avg_y = np.median([pos[1] for pos in positions])
+            avg_x = np.median([pos[0] for pos in positions])
+            player_avg_positions.append((track["player_id"], avg_y, avg_x))
         
         if len(player_avg_positions) < 2:
             return player_tracks
         
-        # Sort by y-position
+        # Sort by y-position (vertical position on court)
         player_avg_positions.sort(key=lambda x: x[1])
         
-        # Assign teams (top half vs bottom half)
-        mid_point = len(player_avg_positions) // 2
-        team_a_ids = [pid for pid, _ in player_avg_positions[:mid_point]]
-        team_b_ids = [pid for pid, _ in player_avg_positions[mid_point:]]
+        # For padel: net divides court horizontally
+        # Split players into two groups based on y-position (top/bottom of court)
+        # Each group is a team (2 players per team for standard padel doubles)
+        
+        if len(player_avg_positions) == 2:
+            # Only 2 players detected - assign to different teams
+            team_a_ids = [player_avg_positions[0][0]]
+            team_b_ids = [player_avg_positions[1][0]]
+        elif len(player_avg_positions) == 3:
+            # 3 players - assign based on gaps in y-position
+            # Find the largest gap to determine net position
+            gaps = []
+            for i in range(len(player_avg_positions) - 1):
+                gap = player_avg_positions[i+1][1] - player_avg_positions[i][1]
+                gaps.append((i, gap))
+            
+            # Split at largest gap (likely the net)
+            max_gap_idx = max(gaps, key=lambda x: x[1])[0]
+            team_a_ids = [pid for pid, _, _ in player_avg_positions[:max_gap_idx+1]]
+            team_b_ids = [pid for pid, _, _ in player_avg_positions[max_gap_idx+1:]]
+        else:
+            # 4 or more players
+            # For 4 players: split in half (2 per team)
+            # For more: try to identify the 4 main players and assign others
+            mid_point = len(player_avg_positions) // 2
+            
+            # Calculate y-position gaps to find natural split (the net)
+            if len(player_avg_positions) >= 4:
+                # Find largest gap in y-positions - this should be the net
+                gaps = []
+                for i in range(len(player_avg_positions) - 1):
+                    gap = player_avg_positions[i+1][1] - player_avg_positions[i][1]
+                    gaps.append((i, gap))
+                
+                # If there's a clear gap, use it to split teams
+                max_gap = max(gaps, key=lambda x: x[1])
+                if max_gap[1] > 50:  # Significant gap (likely the net)
+                    mid_point = max_gap[0] + 1
+            
+            team_a_ids = [pid for pid, _, _ in player_avg_positions[:mid_point]]
+            team_b_ids = [pid for pid, _, _ in player_avg_positions[mid_point:]]
         
         # Update tracks with team assignments
         for track in player_tracks:
@@ -316,7 +381,7 @@ class PlayerTracker:
             elif track["player_id"] in team_b_ids:
                 track["team"] = "B"
         
-        logger.info(f"Team A: {len(team_a_ids)} players, Team B: {len(team_b_ids)} players")
+        logger.info(f"Team A: {len(team_a_ids)} players {team_a_ids}, Team B: {len(team_b_ids)} players {team_b_ids}")
         
         return player_tracks
 
