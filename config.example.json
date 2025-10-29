@@ -21,7 +21,7 @@
     "player_model": "yolov8n",
     "ball_model": "custom_ball_detector",
     "field_model": "segmentation_model",
-    "device": "cpu",
+    "device": "auto",
     "batch_size": 1
   }
 }
