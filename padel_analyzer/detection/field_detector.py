@@ -261,7 +261,7 @@ class FieldDetector:
         Find the 4 corners that best represent the court boundary.
         
         Args:
-            corners: List of detected corner points
+            corners: List of detected corner points (will be converted to float32 for processing)
             
         Returns:
             4 corners representing the court
