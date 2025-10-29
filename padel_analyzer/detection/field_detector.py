@@ -183,26 +183,34 @@ class FieldDetector:
         # Apply Gaussian blur to reduce noise
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         
-        # Edge detection
-        edges = cv2.Canny(blurred, 50, 150, apertureSize=3)
+        # Edge detection with adjusted thresholds for better line detection
+        edges = cv2.Canny(blurred, 30, 100, apertureSize=3)
         
-        # Detect lines using probabilistic Hough transform
+        # Detect lines using probabilistic Hough transform with relaxed parameters
         lines = cv2.HoughLinesP(
             edges,
             rho=1,
             theta=np.pi / 180,
-            threshold=self.config.field_detection.line_detection_threshold,
-            minLineLength=100,
-            maxLineGap=10
+            threshold=max(50, self.config.field_detection.line_detection_threshold // 2),
+            minLineLength=50,  # Reduced from 100 for more lines
+            maxLineGap=20  # Increased from 10 for better connectivity
         )
         
         if lines is None:
             return []
         
-        # Convert to expected format
+        # Convert to expected format and filter
         line_segments = []
         for line in lines:
             x1, y1, x2, y2 = line[0]
+            
+            # Calculate line length
+            length = np.sqrt((x2-x1)**2 + (y2-y1)**2)
+            
+            # Only keep reasonably long lines
+            if length < 30:
+                continue
+            
             line_segments.append(((int(x1), int(y1)), (int(x2), int(y2))))
         
         return line_segments
@@ -239,12 +247,54 @@ class FieldDetector:
                     if is_new:
                         corners.append((int(x), int(y)))
         
-        # Sort corners to form a quadrilateral (top-left, top-right, bottom-right, bottom-left)
+        # If we have enough corners, try to find the largest quadrilateral
+        # that represents the court
         if len(corners) >= 4:
-            corners = self._sort_corners(corners[:8])  # Take top 8 candidates
+            # Find the 4 corners that form the largest quadrilateral
+            corners = self._find_court_quadrilateral(corners)
             return corners[:4]  # Return best 4
         
         return corners
+    
+    def _find_court_quadrilateral(self, corners: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+        """
+        Find the 4 corners that best represent the court boundary.
+        
+        Args:
+            corners: List of detected corner points
+            
+        Returns:
+            4 corners representing the court
+        """
+        if len(corners) < 4:
+            return corners
+        
+        # Convert to numpy array
+        pts = np.array(corners, dtype=np.float32)
+        
+        # Find the convex hull - this often gives us the court boundary
+        hull = cv2.convexHull(pts)
+        hull_points = [tuple(pt[0]) for pt in hull]
+        
+        # If hull has exactly 4 points, use them
+        if len(hull_points) == 4:
+            return self._sort_corners(hull_points)
+        
+        # Otherwise, find 4 extreme points (top-left, top-right, bottom-right, bottom-left)
+        # Sort by y-coordinate
+        sorted_pts = pts[pts[:, 1].argsort()]
+        
+        # Top points (lowest y)
+        top_candidates = sorted_pts[:len(sorted_pts)//2]
+        top_left = tuple(top_candidates[top_candidates[:, 0].argmin()])
+        top_right = tuple(top_candidates[top_candidates[:, 0].argmax()])
+        
+        # Bottom points (highest y)
+        bottom_candidates = sorted_pts[len(sorted_pts)//2:]
+        bottom_left = tuple(bottom_candidates[bottom_candidates[:, 0].argmin()])
+        bottom_right = tuple(bottom_candidates[bottom_candidates[:, 0].argmax()])
+        
+        return self._sort_corners([top_left, top_right, bottom_right, bottom_left])
     
     def _line_intersection(
         self, 
@@ -353,14 +403,14 @@ class FieldDetector:
     
     def create_court_mask(self, frame_shape: Tuple[int, int], corners: List[Tuple[int, int]]) -> Optional[np.ndarray]:
         """
-        Create a binary mask of the court area.
+        Create a binary mask of the court area with expanded boundaries.
         
         Args:
             frame_shape: Shape of the video frame (height, width)
             corners: Court corner points
             
         Returns:
-            Binary mask of court area
+            Binary mask of court area (expanded to include nearby areas)
         """
         if len(corners) < 4:
             return None
@@ -368,8 +418,23 @@ class FieldDetector:
         height, width = frame_shape
         mask = np.zeros((height, width), dtype=np.uint8)
         
-        # Draw filled polygon
-        pts = np.array(corners[:4], dtype=np.int32)
-        cv2.fillPoly(mask, [pts], 255)
+        # Expand the court boundaries to avoid filtering players at edges
+        # Calculate center of court
+        pts = np.array(corners[:4], dtype=np.float32)
+        center = np.mean(pts, axis=0)
+        
+        # Expand each corner away from center by 15%
+        expanded_pts = []
+        for pt in pts:
+            direction = pt - center
+            expanded_pt = pt + direction * 0.15
+            # Clamp to frame boundaries
+            expanded_pt[0] = np.clip(expanded_pt[0], 0, width - 1)
+            expanded_pt[1] = np.clip(expanded_pt[1], 0, height - 1)
+            expanded_pts.append(expanded_pt)
+        
+        # Draw filled polygon with expanded boundaries
+        expanded_pts = np.array(expanded_pts, dtype=np.int32)
+        cv2.fillPoly(mask, [expanded_pts], 255)
         
         return mask
