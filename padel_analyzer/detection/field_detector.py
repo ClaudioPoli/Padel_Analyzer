@@ -101,7 +101,7 @@ class FieldDetector:
     
     def _detect_in_frame(self, frame: np.ndarray) -> Dict[str, Any]:
         """
-        Detect field in a single frame.
+        Detect field in a single frame using color segmentation and edge detection.
         
         Args:
             frame: Video frame to process
@@ -109,23 +109,39 @@ class FieldDetector:
         Returns:
             Field information dictionary
         """
-        # Detect lines
-        lines = self.detect_court_lines(frame)
+        # Try color-based court detection first (more robust for padel courts)
+        court_surface_info = self.detect_court_surface(frame)
+        
+        if court_surface_info is not None:
+            corners, court_mask, confidence = court_surface_info
+            
+            # Detect court lines within the detected surface
+            lines = self.detect_court_lines(frame, court_mask)
+            
+            # Estimate homography if we have corners
+            homography_matrix = None
+            if len(corners) >= 4 and self.config.field_detection.use_homography:
+                homography_matrix = self.estimate_homography(corners)
+            
+            return {
+                "boundaries": corners[:4] if len(corners) >= 4 else None,
+                "lines": lines,
+                "corners": corners,
+                "homography_matrix": homography_matrix,
+                "court_mask": court_mask,
+                "confidence": confidence
+            }
+        
+        # Fallback to line-based detection if color detection fails
+        lines = self.detect_court_lines(frame, None)
         
         if len(lines) < 4:
-            # Not enough lines detected
             return self._empty_field_info()
         
-        # Detect corners from lines
         corners = self.detect_court_corners(lines)
-        
-        # Create court mask
         court_mask = self.create_court_mask(frame.shape[:2], corners)
-        
-        # Calculate confidence based on detected features
         confidence = self._calculate_confidence(lines, corners)
         
-        # Estimate homography if we have corners
         homography_matrix = None
         if len(corners) >= 4 and self.config.field_detection.use_homography:
             homography_matrix = self.estimate_homography(corners)
@@ -167,18 +183,117 @@ class FieldDetector:
         
         return line_score + corner_score
     
-    def detect_court_lines(self, frame: np.ndarray) -> List[Tuple[Tuple[int, int], Tuple[int, int]]]:
+    def detect_court_surface(self, frame: np.ndarray) -> Optional[Tuple[List[Tuple[int, int]], np.ndarray, float]]:
+        """
+        Detect court surface using color segmentation.
+        Works for blue, green, and red padel courts.
+        
+        Args:
+            frame: Video frame to process
+            
+        Returns:
+            Tuple of (corners, court_mask, confidence) or None if detection fails
+        """
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        h, w = frame.shape[:2]
+        
+        # Define color ranges for common padel court colors
+        color_ranges = [
+            # Blue courts
+            (np.array([90, 40, 40]), np.array([130, 255, 255])),
+            # Green courts
+            (np.array([35, 30, 30]), np.array([85, 255, 255])),
+            # Red courts (two ranges for hue wrap-around)
+            (np.array([0, 50, 50]), np.array([10, 255, 255])),
+            (np.array([170, 50, 50]), np.array([180, 255, 255])),
+        ]
+        
+        # Try each color range
+        best_mask = None
+        best_area = 0
+        
+        for lower, upper in color_ranges:
+            mask = cv2.inRange(hsv, lower, upper)
+            
+            # Clean up mask
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+            
+            # Find contours
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if contours:
+                # Get largest contour
+                largest = max(contours, key=cv2.contourArea)
+                area = cv2.contourArea(largest)
+                
+                # Court should cover at least 15% of frame
+                if area > h * w * 0.15 and area > best_area:
+                    best_area = area
+                    best_mask = mask
+        
+        if best_mask is None:
+            logger.warning("Could not detect court surface using color segmentation")
+            return None
+        
+        # Find the largest connected component (the court)
+        contours, _ = cv2.findContours(best_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None
+        
+        largest_contour = max(contours, key=cv2.contourArea)
+        area = cv2.contourArea(largest_contour)
+        
+        # Get bounding rectangle and approximate polygon
+        # Use convex hull to get court shape
+        hull = cv2.convexHull(largest_contour)
+        
+        # Approximate to a quadrilateral
+        epsilon = 0.02 * cv2.arcLength(hull, True)
+        approx = cv2.approxPolyDP(hull, epsilon, True)
+        
+        # If not a quadrilateral, use bounding rectangle
+        if len(approx) != 4:
+            rect = cv2.minAreaRect(largest_contour)
+            box = cv2.boxPoints(rect)
+            corners = [tuple(pt) for pt in box]
+        else:
+            corners = [tuple(pt[0]) for pt in approx]
+        
+        # Sort corners properly
+        corners = self._sort_corners(corners)
+        
+        # Create precise mask from detected contour
+        court_mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(court_mask, [largest_contour], -1, 255, -1)
+        
+        # Calculate confidence based on area coverage
+        coverage = area / (h * w)
+        confidence = min(coverage / 0.5, 1.0)  # Max confidence at 50% coverage
+        
+        logger.info(f"Court surface detected: area={area:.0f} ({coverage*100:.1f}% of frame), confidence={confidence:.2f}")
+        
+        return (corners, court_mask, confidence)
+    
+    def detect_court_lines(self, frame: np.ndarray, court_mask: Optional[np.ndarray] = None) -> List[Tuple[Tuple[int, int], Tuple[int, int]]]:
         """
         Detect court lines in a single frame using Hough Line Transform.
         
         Args:
             frame: Video frame to process
+            court_mask: Optional mask to limit line detection to court area
             
         Returns:
             List of line segments as ((x1, y1), (x2, y2)) tuples
         """
         # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        
+        # If we have a court mask, focus on that area
+        if court_mask is not None:
+            # Mask out non-court areas
+            gray = cv2.bitwise_and(gray, gray, mask=court_mask)
         
         # Apply Gaussian blur to reduce noise
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
