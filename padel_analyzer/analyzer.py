@@ -64,8 +64,8 @@ class PadelAnalyzer:
             # Track players
             player_tracks = self.player_tracker.track(video_data, field_info)
             
-            # Track ball
-            ball_tracks = self.ball_tracker.track(video_data, field_info)
+            # Track ball (pass player tracks for proximity hints)
+            ball_tracks = self.ball_tracker.track(video_data, field_info, player_tracks)
             
             return {
                 "field_info": field_info,

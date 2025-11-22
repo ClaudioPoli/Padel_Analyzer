@@ -249,11 +249,19 @@ class FieldDetector:
         # Use convex hull to get court shape
         hull = cv2.convexHull(largest_contour)
         
-        # Approximate to a quadrilateral
+        # Approximate to a quadrilateral with perspective consideration
         epsilon = 0.02 * cv2.arcLength(hull, True)
         approx = cv2.approxPolyDP(hull, epsilon, True)
         
-        # If not a quadrilateral, use bounding rectangle
+        # If not a quadrilateral, try different epsilon values
+        if len(approx) != 4:
+            for eps_factor in [0.01, 0.03, 0.04, 0.05]:
+                epsilon = eps_factor * cv2.arcLength(hull, True)
+                approx = cv2.approxPolyDP(hull, epsilon, True)
+                if len(approx) == 4:
+                    break
+        
+        # If still not a quadrilateral, use bounding rectangle
         if len(approx) != 4:
             rect = cv2.minAreaRect(largest_contour)
             box = cv2.boxPoints(rect)
@@ -261,8 +269,8 @@ class FieldDetector:
         else:
             corners = [tuple(pt[0]) for pt in approx]
         
-        # Sort corners properly
-        corners = self._sort_corners(corners)
+        # Sort corners properly with perspective awareness
+        corners = self._sort_corners_with_perspective(corners)
         
         # Create precise mask from detected contour
         court_mask = np.zeros((h, w), dtype=np.uint8)
@@ -471,6 +479,55 @@ class FieldDetector:
         # Bottom two points
         bottom_pts = sorted_pts[-2:]
         bottom_pts = bottom_pts[bottom_pts[:, 0].argsort()]  # Sort by x
+        
+        # Order: top-left, top-right, bottom-right, bottom-left
+        ordered = [
+            tuple(top_pts[0]),
+            tuple(top_pts[1]),
+            tuple(bottom_pts[1]),
+            tuple(bottom_pts[0])
+        ]
+        
+        return [(int(x), int(y)) for x, y in ordered]
+    
+    def _sort_corners_with_perspective(self, corners: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+        """
+        Sort corners accounting for perspective distortion.
+        In padel court videos, the upper (far) side is shorter than lower (near) side.
+        
+        Args:
+            corners: List of 4 corner points
+            
+        Returns:
+            Sorted corners: [top-left, top-right, bottom-right, bottom-left]
+        """
+        if len(corners) != 4:
+            return self._sort_corners(corners)
+        
+        pts = np.array(corners, dtype=np.float32)
+        
+        # Sort by y-coordinate
+        sorted_pts = pts[pts[:, 1].argsort()]
+        
+        # Top two points (far from camera, should be closer together)
+        top_pts = sorted_pts[:2]
+        top_pts = top_pts[top_pts[:, 0].argsort()]  # Sort by x
+        
+        # Bottom two points (near camera, should be further apart)
+        bottom_pts = sorted_pts[-2:]
+        bottom_pts = bottom_pts[bottom_pts[:, 0].argsort()]  # Sort by x
+        
+        # Verify perspective: upper width should be less than lower width
+        upper_width = top_pts[1][0] - top_pts[0][0]
+        lower_width = bottom_pts[1][0] - bottom_pts[0][0]
+        
+        # If perspective is reversed (unusual camera angle), swap
+        if upper_width > lower_width * 1.2:  # Allow some tolerance
+            logger.warning("Unusual perspective detected - upper side wider than lower side")
+            # This might indicate the camera is looking down, swap top/bottom
+            temp = top_pts.copy()
+            top_pts = bottom_pts
+            bottom_pts = temp
         
         # Order: top-left, top-right, bottom-right, bottom-left
         ordered = [
