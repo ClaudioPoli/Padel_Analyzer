@@ -101,7 +101,7 @@ class FieldDetector:
     
     def _detect_in_frame(self, frame: np.ndarray) -> Dict[str, Any]:
         """
-        Detect field in a single frame.
+        Detect field in a single frame using color segmentation and edge detection.
         
         Args:
             frame: Video frame to process
@@ -109,23 +109,39 @@ class FieldDetector:
         Returns:
             Field information dictionary
         """
-        # Detect lines
-        lines = self.detect_court_lines(frame)
+        # Try color-based court detection first (more robust for padel courts)
+        court_surface_info = self.detect_court_surface(frame)
+        
+        if court_surface_info is not None:
+            corners, court_mask, confidence = court_surface_info
+            
+            # Detect court lines within the detected surface
+            lines = self.detect_court_lines(frame, court_mask)
+            
+            # Estimate homography if we have corners
+            homography_matrix = None
+            if len(corners) >= 4 and self.config.field_detection.use_homography:
+                homography_matrix = self.estimate_homography(corners)
+            
+            return {
+                "boundaries": corners[:4] if len(corners) >= 4 else None,
+                "lines": lines,
+                "corners": corners,
+                "homography_matrix": homography_matrix,
+                "court_mask": court_mask,
+                "confidence": confidence
+            }
+        
+        # Fallback to line-based detection if color detection fails
+        lines = self.detect_court_lines(frame, None)
         
         if len(lines) < 4:
-            # Not enough lines detected
             return self._empty_field_info()
         
-        # Detect corners from lines
         corners = self.detect_court_corners(lines)
-        
-        # Create court mask
         court_mask = self.create_court_mask(frame.shape[:2], corners)
-        
-        # Calculate confidence based on detected features
         confidence = self._calculate_confidence(lines, corners)
         
-        # Estimate homography if we have corners
         homography_matrix = None
         if len(corners) >= 4 and self.config.field_detection.use_homography:
             homography_matrix = self.estimate_homography(corners)
@@ -167,12 +183,114 @@ class FieldDetector:
         
         return line_score + corner_score
     
-    def detect_court_lines(self, frame: np.ndarray) -> List[Tuple[Tuple[int, int], Tuple[int, int]]]:
+    def detect_court_surface(self, frame: np.ndarray) -> Optional[Tuple[List[Tuple[int, int]], np.ndarray, float]]:
+        """
+        Detect court surface using color segmentation.
+        Works for blue, green, and red padel courts.
+        
+        Args:
+            frame: Video frame to process
+            
+        Returns:
+            Tuple of (corners, court_mask, confidence) or None if detection fails
+        """
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        h, w = frame.shape[:2]
+        
+        # Define color ranges for common padel court colors
+        color_ranges = [
+            # Blue courts
+            (np.array([90, 40, 40]), np.array([130, 255, 255])),
+            # Green courts
+            (np.array([35, 30, 30]), np.array([85, 255, 255])),
+            # Red courts (two ranges for hue wrap-around)
+            (np.array([0, 50, 50]), np.array([10, 255, 255])),
+            (np.array([170, 50, 50]), np.array([180, 255, 255])),
+        ]
+        
+        # Try each color range
+        best_mask = None
+        best_area = 0
+        
+        for lower, upper in color_ranges:
+            mask = cv2.inRange(hsv, lower, upper)
+            
+            # Clean up mask
+            kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+            
+            # Find contours
+            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            if contours:
+                # Get largest contour
+                largest = max(contours, key=cv2.contourArea)
+                area = cv2.contourArea(largest)
+                
+                # Court should cover at least 15% of frame
+                if area > h * w * 0.15 and area > best_area:
+                    best_area = area
+                    best_mask = mask
+        
+        if best_mask is None:
+            logger.warning("Could not detect court surface using color segmentation")
+            return None
+        
+        # Find the largest connected component (the court)
+        contours, _ = cv2.findContours(best_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None
+        
+        largest_contour = max(contours, key=cv2.contourArea)
+        area = cv2.contourArea(largest_contour)
+        
+        # Get bounding rectangle and approximate polygon
+        # Use convex hull to get court shape
+        hull = cv2.convexHull(largest_contour)
+        
+        # Approximate to a quadrilateral with perspective consideration
+        epsilon = 0.02 * cv2.arcLength(hull, True)
+        approx = cv2.approxPolyDP(hull, epsilon, True)
+        
+        # If not a quadrilateral, try different epsilon values
+        if len(approx) != 4:
+            for eps_factor in [0.01, 0.03, 0.04, 0.05]:
+                epsilon = eps_factor * cv2.arcLength(hull, True)
+                approx = cv2.approxPolyDP(hull, epsilon, True)
+                if len(approx) == 4:
+                    break
+        
+        # If still not a quadrilateral, use bounding rectangle
+        if len(approx) != 4:
+            rect = cv2.minAreaRect(largest_contour)
+            box = cv2.boxPoints(rect)
+            corners = [tuple(pt) for pt in box]
+        else:
+            corners = [tuple(pt[0]) for pt in approx]
+        
+        # Sort corners properly with perspective awareness
+        corners = self._sort_corners_with_perspective(corners)
+        
+        # Create precise mask from detected contour
+        court_mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(court_mask, [largest_contour], -1, 255, -1)
+        
+        # Calculate confidence based on area coverage
+        coverage = area / (h * w)
+        confidence = min(coverage / 0.5, 1.0)  # Max confidence at 50% coverage
+        
+        logger.info(f"Court surface detected: area={area:.0f} ({coverage*100:.1f}% of frame), confidence={confidence:.2f}")
+        
+        return (corners, court_mask, confidence)
+    
+    def detect_court_lines(self, frame: np.ndarray, court_mask: Optional[np.ndarray] = None) -> List[Tuple[Tuple[int, int], Tuple[int, int]]]:
         """
         Detect court lines in a single frame using Hough Line Transform.
         
         Args:
             frame: Video frame to process
+            court_mask: Optional mask to limit line detection to court area
             
         Returns:
             List of line segments as ((x1, y1), (x2, y2)) tuples
@@ -180,29 +298,42 @@ class FieldDetector:
         # Convert to grayscale
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
+        # If we have a court mask, focus on that area
+        if court_mask is not None:
+            # Mask out non-court areas
+            gray = cv2.bitwise_and(gray, gray, mask=court_mask)
+        
         # Apply Gaussian blur to reduce noise
         blurred = cv2.GaussianBlur(gray, (5, 5), 0)
         
-        # Edge detection
-        edges = cv2.Canny(blurred, 50, 150, apertureSize=3)
+        # Edge detection with adjusted thresholds for better line detection
+        edges = cv2.Canny(blurred, 30, 100, apertureSize=3)
         
-        # Detect lines using probabilistic Hough transform
+        # Detect lines using probabilistic Hough transform with relaxed parameters
         lines = cv2.HoughLinesP(
             edges,
             rho=1,
             theta=np.pi / 180,
-            threshold=self.config.field_detection.line_detection_threshold,
-            minLineLength=100,
-            maxLineGap=10
+            threshold=max(50, self.config.field_detection.line_detection_threshold // 2),
+            minLineLength=50,  # Reduced from 100 for more lines
+            maxLineGap=20  # Increased from 10 for better connectivity
         )
         
         if lines is None:
             return []
         
-        # Convert to expected format
+        # Convert to expected format and filter
         line_segments = []
         for line in lines:
             x1, y1, x2, y2 = line[0]
+            
+            # Calculate line length
+            length = np.sqrt((x2-x1)**2 + (y2-y1)**2)
+            
+            # Only keep reasonably long lines
+            if length < 30:
+                continue
+            
             line_segments.append(((int(x1), int(y1)), (int(x2), int(y2))))
         
         return line_segments
@@ -239,12 +370,54 @@ class FieldDetector:
                     if is_new:
                         corners.append((int(x), int(y)))
         
-        # Sort corners to form a quadrilateral (top-left, top-right, bottom-right, bottom-left)
+        # If we have enough corners, try to find the largest quadrilateral
+        # that represents the court
         if len(corners) >= 4:
-            corners = self._sort_corners(corners[:8])  # Take top 8 candidates
+            # Find the 4 corners that form the largest quadrilateral
+            corners = self._find_court_quadrilateral(corners)
             return corners[:4]  # Return best 4
         
         return corners
+    
+    def _find_court_quadrilateral(self, corners: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+        """
+        Find the 4 corners that best represent the court boundary.
+        
+        Args:
+            corners: List of detected corner points (will be converted to float32 for processing)
+            
+        Returns:
+            4 corners representing the court
+        """
+        if len(corners) < 4:
+            return corners
+        
+        # Convert to numpy array
+        pts = np.array(corners, dtype=np.float32)
+        
+        # Find the convex hull - this often gives us the court boundary
+        hull = cv2.convexHull(pts)
+        hull_points = [tuple(pt[0]) for pt in hull]
+        
+        # If hull has exactly 4 points, use them
+        if len(hull_points) == 4:
+            return self._sort_corners(hull_points)
+        
+        # Otherwise, find 4 extreme points (top-left, top-right, bottom-right, bottom-left)
+        # Sort by y-coordinate
+        sorted_pts = pts[pts[:, 1].argsort()]
+        
+        # Top points (lowest y)
+        top_candidates = sorted_pts[:len(sorted_pts)//2]
+        top_left = tuple(top_candidates[top_candidates[:, 0].argmin()])
+        top_right = tuple(top_candidates[top_candidates[:, 0].argmax()])
+        
+        # Bottom points (highest y)
+        bottom_candidates = sorted_pts[len(sorted_pts)//2:]
+        bottom_left = tuple(bottom_candidates[bottom_candidates[:, 0].argmin()])
+        bottom_right = tuple(bottom_candidates[bottom_candidates[:, 0].argmax()])
+        
+        return self._sort_corners([top_left, top_right, bottom_right, bottom_left])
     
     def _line_intersection(
         self, 
@@ -317,6 +490,55 @@ class FieldDetector:
         
         return [(int(x), int(y)) for x, y in ordered]
     
+    def _sort_corners_with_perspective(self, corners: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+        """
+        Sort corners accounting for perspective distortion.
+        In padel court videos, the upper (far) side is shorter than lower (near) side.
+        
+        Args:
+            corners: List of 4 corner points
+            
+        Returns:
+            Sorted corners: [top-left, top-right, bottom-right, bottom-left]
+        """
+        if len(corners) != 4:
+            return self._sort_corners(corners)
+        
+        pts = np.array(corners, dtype=np.float32)
+        
+        # Sort by y-coordinate
+        sorted_pts = pts[pts[:, 1].argsort()]
+        
+        # Top two points (far from camera, should be closer together)
+        top_pts = sorted_pts[:2]
+        top_pts = top_pts[top_pts[:, 0].argsort()]  # Sort by x
+        
+        # Bottom two points (near camera, should be further apart)
+        bottom_pts = sorted_pts[-2:]
+        bottom_pts = bottom_pts[bottom_pts[:, 0].argsort()]  # Sort by x
+        
+        # Verify perspective: upper width should be less than lower width
+        upper_width = top_pts[1][0] - top_pts[0][0]
+        lower_width = bottom_pts[1][0] - bottom_pts[0][0]
+        
+        # If perspective is reversed (unusual camera angle), swap
+        if upper_width > lower_width * 1.2:  # Allow some tolerance
+            logger.warning("Unusual perspective detected - upper side wider than lower side")
+            # This might indicate the camera is looking down, swap top/bottom
+            temp = top_pts.copy()
+            top_pts = bottom_pts
+            bottom_pts = temp
+        
+        # Order: top-left, top-right, bottom-right, bottom-left
+        ordered = [
+            tuple(top_pts[0]),
+            tuple(top_pts[1]),
+            tuple(bottom_pts[1]),
+            tuple(bottom_pts[0])
+        ]
+        
+        return [(int(x), int(y)) for x, y in ordered]
+    
     def estimate_homography(self, corners: List[Tuple[int, int]]) -> Optional[np.ndarray]:
         """
         Estimate homography matrix for perspective transformation.
@@ -353,14 +575,14 @@ class FieldDetector:
     
     def create_court_mask(self, frame_shape: Tuple[int, int], corners: List[Tuple[int, int]]) -> Optional[np.ndarray]:
         """
-        Create a binary mask of the court area.
+        Create a binary mask of the court area with expanded boundaries.
         
         Args:
             frame_shape: Shape of the video frame (height, width)
             corners: Court corner points
             
         Returns:
-            Binary mask of court area
+            Binary mask of court area (expanded to include nearby areas)
         """
         if len(corners) < 4:
             return None
@@ -368,8 +590,23 @@ class FieldDetector:
         height, width = frame_shape
         mask = np.zeros((height, width), dtype=np.uint8)
         
-        # Draw filled polygon
-        pts = np.array(corners[:4], dtype=np.int32)
-        cv2.fillPoly(mask, [pts], 255)
+        # Expand the court boundaries to avoid filtering players at edges
+        # Calculate center of court
+        pts = np.array(corners[:4], dtype=np.float32)
+        center = np.mean(pts, axis=0)
+        
+        # Expand each corner away from center by 15%
+        expanded_pts = []
+        for pt in pts:
+            direction = pt - center
+            expanded_pt = pt + direction * 0.15
+            # Clamp to frame boundaries
+            expanded_pt[0] = np.clip(expanded_pt[0], 0, width - 1)
+            expanded_pt[1] = np.clip(expanded_pt[1], 0, height - 1)
+            expanded_pts.append(expanded_pt)
+        
+        # Draw filled polygon with expanded boundaries
+        expanded_pts = np.array(expanded_pts, dtype=np.int32)
+        cv2.fillPoly(mask, [expanded_pts], 255)
         
         return mask
