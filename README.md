@@ -235,8 +235,6 @@ Automatic detection of best available device:
 - **MPS**: Apple Silicon GPUs on macOS
 - **CPU**: Fallback for systems without GPU
 
-See `IMPLEMENTATION.md` for detailed technical documentation.
-
 ## Testing
 
 Run tests using pytest:
