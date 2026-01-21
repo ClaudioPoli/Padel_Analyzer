@@ -9,7 +9,8 @@
     "ball_detection_confidence": 0.3,
     "max_tracking_distance": 100,
     "interpolate_missing": true,
-    "max_interpolation_gap": 5
+    "max_interpolation_gap": 5,
+    "use_keypoints_for_team": false
   },
   "field_detection": {
     "line_detection_threshold": 100,
@@ -22,5 +23,19 @@
     "ball_model": "yolov8n.pt",
     "device": "auto",
     "batch_size": 1
+  },
+  "pose": {
+    "enabled": true,
+    "pose_model": "yolov8n-pose.pt",
+    "min_confidence": 0.25,
+    "estimate_for_all_frames": false,
+    "frame_sample_rate": 3
+  },
+  "action_recognition": {
+    "enabled": true,
+    "use_ml_model": false,
+    "model_path": null,
+    "buffer_size": 16,
+    "min_action_confidence": 0.5
   }
 }

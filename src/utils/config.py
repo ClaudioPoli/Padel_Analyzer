@@ -24,6 +24,7 @@ class TrackingConfig:
     max_tracking_distance: int = 100  # pixels
     interpolate_missing: bool = True
     max_interpolation_gap: int = 5  # frames
+    use_keypoints_for_team: bool = False  # Use keypoints for team assignment
 
 
 @dataclass
@@ -45,17 +46,54 @@ class ModelConfig:
 
 
 @dataclass
+class PoseConfig:
+    """
+    Pose estimation configuration.
+    
+    Uses YOLOv8-Pose for zero-shot pose estimation (recommended).
+    For fine-tuning, set use_custom_model=True and provide model_path.
+    """
+    enabled: bool = True  # Enable pose estimation
+    pose_model: str = "yolov8n-pose.pt"  # YOLO pose model (n/s/m/l/x variants)
+    min_confidence: float = 0.25  # Minimum keypoint confidence
+    estimate_for_all_frames: bool = False  # If False, sample frames for efficiency
+    frame_sample_rate: int = 3  # Process every Nth frame when sampling
+
+
+@dataclass
+class ActionRecognitionConfig:
+    """
+    Action/shot recognition configuration.
+    
+    Current approach: Rule-based classification using pose geometry.
+    For production: Set use_ml_model=True and provide a fine-tuned model.
+    
+    Recommended fine-tuning approach:
+    - Collect ~500-1000 examples per action class
+    - Use pose sequences (16 frames) as input
+    - Train LSTM or Transformer-based classifier
+    """
+    enabled: bool = True  # Enable action recognition
+    use_ml_model: bool = False  # Use ML model instead of rules
+    model_path: Optional[str] = None  # Path to fine-tuned action recognition model
+    buffer_size: int = 16  # Number of frames for temporal analysis
+    min_action_confidence: float = 0.5  # Minimum confidence to report action
+
+
+@dataclass
 class Config:
     """
     Main configuration class for Padel Analyzer.
     
     Contains all configuration parameters for video processing,
-    tracking, detection, and model settings.
+    tracking, detection, pose estimation, action recognition, and model settings.
     """
     video: VideoConfig = field(default_factory=VideoConfig)
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
     field_detection: FieldDetectionConfig = field(default_factory=FieldDetectionConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
+    pose: PoseConfig = field(default_factory=PoseConfig)
+    action_recognition: ActionRecognitionConfig = field(default_factory=ActionRecognitionConfig)
     
     def __post_init__(self):
         """Initialize nested configs if they're dictionaries."""
@@ -67,6 +105,10 @@ class Config:
             self.field_detection = FieldDetectionConfig(**self.field_detection)
         if isinstance(self.model, dict):
             self.model = ModelConfig(**self.model)
+        if isinstance(self.pose, dict):
+            self.pose = PoseConfig(**self.pose)
+        if isinstance(self.action_recognition, dict):
+            self.action_recognition = ActionRecognitionConfig(**self.action_recognition)
     
     @classmethod
     def from_file(cls, config_path: str) -> 'Config':
@@ -94,7 +136,9 @@ class Config:
             'video': self.video.__dict__,
             'tracking': self.tracking.__dict__,
             'field_detection': self.field_detection.__dict__,
-            'model': self.model.__dict__
+            'model': self.model.__dict__,
+            'pose': self.pose.__dict__,
+            'action_recognition': self.action_recognition.__dict__
         }
         with open(config_path, 'w') as f:
             json.dump(config_dict, f, indent=2)
