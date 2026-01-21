@@ -20,6 +20,9 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# Small epsilon value to prevent division by zero in angle calculations
+EPSILON = 1e-6
+
 # COCO Keypoint indices for YOLOv8-Pose
 # https://docs.ultralytics.com/tasks/pose/
 KEYPOINT_NAMES = [
@@ -358,7 +361,7 @@ class PoseEstimator:
             v1 = p1 - p2
             v2 = p3 - p2
             
-            cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-6)
+            cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + EPSILON)
             cos_angle = np.clip(cos_angle, -1.0, 1.0)
             angle = np.arccos(cos_angle)
             return np.degrees(angle)
@@ -404,7 +407,7 @@ class PoseEstimator:
             # Vertical reference (straight up from shoulder)
             vertical = np.array([0, -1])
             arm_vec = left_elbow - left_shoulder
-            cos_angle = np.dot(vertical, arm_vec) / (np.linalg.norm(arm_vec) + 1e-6)
+            cos_angle = np.dot(vertical, arm_vec) / (np.linalg.norm(arm_vec) + EPSILON)
             cos_angle = np.clip(cos_angle, -1.0, 1.0)
             angles["left_arm_raise"] = np.degrees(np.arccos(cos_angle))
         else:
@@ -413,7 +416,7 @@ class PoseEstimator:
         if right_shoulder is not None and right_elbow is not None:
             vertical = np.array([0, -1])
             arm_vec = right_elbow - right_shoulder
-            cos_angle = np.dot(vertical, arm_vec) / (np.linalg.norm(arm_vec) + 1e-6)
+            cos_angle = np.dot(vertical, arm_vec) / (np.linalg.norm(arm_vec) + EPSILON)
             cos_angle = np.clip(cos_angle, -1.0, 1.0)
             angles["right_arm_raise"] = np.degrees(np.arccos(cos_angle))
         else:
@@ -423,7 +426,7 @@ class PoseEstimator:
         if left_shoulder is not None and left_hip is not None:
             vertical = np.array([0, 1])  # Down
             torso_vec = left_hip - left_shoulder
-            cos_angle = np.dot(vertical, torso_vec) / (np.linalg.norm(torso_vec) + 1e-6)
+            cos_angle = np.dot(vertical, torso_vec) / (np.linalg.norm(torso_vec) + EPSILON)
             cos_angle = np.clip(cos_angle, -1.0, 1.0)
             angles["torso_lean"] = np.degrees(np.arccos(cos_angle))
         else:

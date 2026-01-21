@@ -49,6 +49,9 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
+# Small epsilon value to prevent division by zero in angle calculations
+EPSILON = 1e-6
+
 
 class PadelAction(Enum):
     """Enumeration of padel actions/shots."""
@@ -364,20 +367,19 @@ class ActionRecognizer:
             not features.get("arm_lateral", False)
         )
         
-        # Feature: Knees bent
-        if left_hip is not None and left_knee is not None:
-            if keypoints_conf[self.LEFT_ANKLE] >= min_conf:
-                left_ankle = keypoints[self.LEFT_ANKLE]
-                left_knee_angle = self._compute_angle(left_hip, left_knee, left_ankle)
-                features["left_knee_bent"] = left_knee_angle < self.bent_knee_threshold
-                features["left_knee_angle"] = left_knee_angle
+        # Feature: Knees bent - also get ankle positions for later use
+        left_ankle = get_point(self.LEFT_ANKLE)
+        right_ankle = get_point(self.RIGHT_ANKLE)
         
-        if right_hip is not None and right_knee is not None:
-            if keypoints_conf[self.RIGHT_ANKLE] >= min_conf:
-                right_ankle = keypoints[self.RIGHT_ANKLE]
-                right_knee_angle = self._compute_angle(right_hip, right_knee, right_ankle)
-                features["right_knee_bent"] = right_knee_angle < self.bent_knee_threshold
-                features["right_knee_angle"] = right_knee_angle
+        if left_hip is not None and left_knee is not None and left_ankle is not None:
+            left_knee_angle = self._compute_angle(left_hip, left_knee, left_ankle)
+            features["left_knee_bent"] = left_knee_angle < self.bent_knee_threshold
+            features["left_knee_angle"] = left_knee_angle
+        
+        if right_hip is not None and right_knee is not None and right_ankle is not None:
+            right_knee_angle = self._compute_angle(right_hip, right_knee, right_ankle)
+            features["right_knee_bent"] = right_knee_angle < self.bent_knee_threshold
+            features["right_knee_angle"] = right_knee_angle
         
         features["knees_bent"] = (
             features.get("left_knee_bent", False) or 
@@ -417,13 +419,13 @@ class ActionRecognizer:
         v1 = p1 - p2
         v2 = p3 - p2
         
-        cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-6)
+        cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + EPSILON)
         cos_angle = np.clip(cos_angle, -1.0, 1.0)
         return np.degrees(np.arccos(cos_angle))
     
     def _compute_angle_2d(self, v1: np.ndarray, v2: np.ndarray) -> float:
         """Compute angle between two 2D vectors in degrees."""
-        cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-6)
+        cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + EPSILON)
         cos_angle = np.clip(cos_angle, -1.0, 1.0)
         return np.degrees(np.arccos(cos_angle))
     
