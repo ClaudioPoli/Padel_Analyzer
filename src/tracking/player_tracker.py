@@ -44,7 +44,8 @@ class PlayerTracker:
             # If pose estimation is enabled, use YOLOv8-pose directly for efficiency
             # This does detection + tracking + pose in one pass (much faster!)
             if self.use_pose_estimation:
-                pose_model_name = getattr(self.config.pose, 'pose_model', 'yolov8n-pose.pt')
+                # Use MEDIUM model for better detection of small/distant players
+                pose_model_name = getattr(self.config.pose, 'pose_model', 'yolov8m-pose.pt')
                 logger.info(f"Loading YOLOv8-pose for integrated tracking + pose: {pose_model_name}")
                 self.detection_model = YOLO(pose_model_name)
                 self.detection_model.to(device)
@@ -157,8 +158,10 @@ class PlayerTracker:
             return []
         
         try:
-            # Run YOLO detection/tracking with lower confidence for better recall
-            min_conf = min(0.2, self.config.tracking.player_detection_confidence)
+            # Run YOLO detection/tracking with very low confidence for better recall
+            # Important: Players far from camera (top of court) have lower confidence
+            # Use higher input resolution to better detect small/distant objects
+            min_conf = 0.05  # Extremely permissive to catch distant players
             
             results = self.detection_model.track(
                 frame, 
@@ -166,8 +169,9 @@ class PlayerTracker:
                 classes=[0],  # 0 = person in COCO dataset
                 conf=min_conf,
                 verbose=False,
-                iou=0.4,
-                max_det=15,
+                iou=0.3,  # Lower IOU for better tracking of small/distant players
+                max_det=30,  # Increased to ensure we catch all players
+                imgsz=1280,  # Higher resolution input for better small object detection
                 tracker="bytetrack.yaml"
             )
             
@@ -198,13 +202,13 @@ class PlayerTracker:
                     bottom_center_x = int((x1 + x2) / 2)
                     bottom_center_y = int(y2)  # Bottom of bounding box
                     
-                    # More lenient filtering for field mask
-                    # Only filter if clearly outside court (e.g., spectators in stands)
-                    # For padel, players can be near walls/glass, so be very permissive
+                    # Very lenient filtering for field mask
+                    # Only filter obvious non-players (e.g., spectators far from court)
+                    # For padel, be extremely permissive to avoid losing distant players
                     if field_mask is not None:
                         h, w = field_mask.shape
-                        # Allow very generous margin - 50px for players near boundaries
-                        margin = 50
+                        # Very generous margin - 100px for distant/small players
+                        margin = 100
                         
                         # Check if feet position is within expanded court area
                         if 0 <= bottom_center_y < h and 0 <= bottom_center_x < w:
@@ -215,11 +219,11 @@ class PlayerTracker:
                             x_max = min(w, bottom_center_x + margin)
                             
                             # Only filter if NO part of the margin area is on court
-                            # This is very permissive to avoid losing players
+                            # AND confidence is very low (likely not a player)
                             if np.sum(field_mask[y_min:y_max, x_min:x_max]) == 0:
-                                # Additional check: if confidence is high, keep it anyway
-                                # (might be a player outside court temporarily)
-                                if confidence < 0.6:
+                                # Keep even low confidence if bbox is reasonably sized
+                                bbox_area = (x2 - x1) * (y2 - y1)
+                                if confidence < 0.3 and bbox_area < 500:  # Very small and low conf
                                     continue
                     
                     detection = {
@@ -336,14 +340,10 @@ class PlayerTracker:
                 tracks_dict[track_id]["keypoints_conf_sequence"].append(None)
         
         # Convert to list format and filter short tracks
-        min_track_length = 3  # Minimum frames to be considered a valid track
-        all_tracks = []
-        
+        # Dynamic threshold: if we have fewer tracks, be more lenient
+        all_tracks_raw = []
         for track_id, track_data in tracks_dict.items():
-            if len(track_data["positions"]) < min_track_length:
-                continue
-            
-            all_tracks.append({
+            all_tracks_raw.append({
                 "player_id": track_id,
                 "positions": track_data["positions"],
                 "bounding_boxes": track_data["bounding_boxes"],
@@ -351,12 +351,29 @@ class PlayerTracker:
                 "frame_numbers": track_data["frame_numbers"],
                 "keypoints_sequence": track_data["keypoints_sequence"],
                 "keypoints_conf_sequence": track_data["keypoints_conf_sequence"],
-                "team": None  # To be assigned later
+                "team": None,
+                "track_length": len(track_data["positions"])
             })
         
-        # For padel doubles, we expect 4 players
+        # For padel doubles, we ALWAYS expect exactly 4 players
+        # Use adaptive filtering based on how many tracks we have
+        if len(all_tracks_raw) <= 4:
+            # If we have 4 or fewer, keep all (even if short/weak)
+            all_tracks = all_tracks_raw
+            logger.info(f"Found {len(all_tracks)} tracks - keeping all (expecting 4 players)")
+        elif len(all_tracks_raw) <= 6:
+            # If we have 5-6, apply minimal filtering
+            min_track_length = max(3, len(all_detections) // 100)  # At least 3 or 1% of frames
+            all_tracks = [t for t in all_tracks_raw if t["track_length"] >= min_track_length]
+            logger.info(f"Filtered {len(all_tracks_raw)} tracks to {len(all_tracks)} with min_length={min_track_length}")
+        else:
+            # If we have many tracks, apply stricter filtering
+            min_track_length = max(10, len(all_detections) // 50)  # At least 10 or 2% of frames
+            all_tracks = [t for t in all_tracks_raw if t["track_length"] >= min_track_length]
+            logger.info(f"Filtered {len(all_tracks_raw)} tracks to {len(all_tracks)} with min_length={min_track_length}")
+        
+        # For padel doubles, we expect exactly 4 players
         # Keep the 4 tracks with highest coverage/consistency
-        # Sort by number of frames (coverage) and keep top 4
         if len(all_tracks) > 4:
             # Score tracks by coverage and average confidence
             scored_tracks = []
@@ -378,6 +395,11 @@ class PlayerTracker:
         # Assign teams based on court position
         if len(player_tracks) >= 2:
             player_tracks = self.assign_teams(player_tracks, field_info)
+        
+        # Warn if we don't have exactly 4 players (expected for padel doubles)
+        if len(player_tracks) != 4:
+            logger.warning(f"Expected 4 players but found {len(player_tracks)} tracks. "
+                         f"Consider adjusting confidence threshold or tracking parameters.")
         
         return player_tracks
     
