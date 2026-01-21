@@ -25,35 +25,33 @@ class PlayerTracker:
             config: Configuration object containing tracking settings
         """
         self.config = config
-        self.model = None
-        self._load_model()
+        self.detection_model = None
+        self._load_models()
         
-    def _load_model(self):
-        """Load YOLO model for person detection."""
+    def _load_models(self):
+        """Load YOLO model for player detection."""
         try:
             from ultralytics import YOLO
             from padel_analyzer.utils.device import get_device
             
-            model_name = self.config.model.player_model
-            logger.info(f"Loading player detection model: {model_name}")
-            
-            # Load YOLO model
-            self.model = YOLO(model_name)
-            
-            # Set device
+            # Get device
             device = get_device(self.config.model.device)
-            self.model.to(device)
             
+            # Load detection model
+            detection_model_name = self.config.model.player_model
+            logger.info(f"Loading player detection model: {detection_model_name}")
+            self.detection_model = YOLO(detection_model_name)
+            self.detection_model.to(device)
             logger.info(f"Player tracker initialized with device: {device}")
             
         except ImportError:
             logger.warning(
                 "Ultralytics YOLO not installed. Install with: pip install ultralytics"
             )
-            self.model = None
+            self.detection_model = None
         except Exception as e:
             logger.error(f"Failed to load player tracking model: {e}")
-            self.model = None
+            self.detection_model = None
     
     def track(self, video_data: Dict[str, Any], field_info: Dict[str, Any]) -> List[Dict[str, Any]]:
         """
@@ -73,7 +71,7 @@ class PlayerTracker:
         """
         logger.info("Starting player tracking")
         
-        if self.model is None:
+        if self.detection_model is None:
             logger.warning("Player tracking model not loaded, returning empty tracks")
             return []
         
@@ -128,7 +126,9 @@ class PlayerTracker:
         field_mask: Optional[np.ndarray] = None
     ) -> List[Dict[str, Any]]:
         """
-        Detect players in a single frame using YOLO.
+        Detect players in a single frame using hybrid approach:
+        1. Detection model for bounding boxes
+        2. Pose model for keypoints (if enabled)
         
         Args:
             frame: Video frame to process
@@ -136,25 +136,24 @@ class PlayerTracker:
             field_mask: Optional court mask to filter detections
             
         Returns:
-            List of detected players with bounding boxes and confidence scores
+            List of detected players with bounding boxes, keypoints, and confidence scores
         """
-        if self.model is None:
+        if self.detection_model is None:
             return []
         
         try:
             # Run YOLO detection with lower confidence for better recall
-            # Use a lower threshold than config to catch more players initially
             min_conf = min(0.2, self.config.tracking.player_detection_confidence)
             
-            results = self.model.track(
+            results = self.detection_model.track(
                 frame, 
                 persist=True,
                 classes=[0],  # 0 = person in COCO dataset
                 conf=min_conf,
                 verbose=False,
-                iou=0.4,  # Lower IoU threshold to avoid merging nearby players
-                max_det=15,  # Increased to catch all players + some margin
-                tracker="bytetrack.yaml"  # Use ByteTrack for better multi-object tracking
+                iou=0.4,
+                max_det=15,
+                tracker="bytetrack.yaml"
             )
             
             detections = []
@@ -239,7 +238,9 @@ class PlayerTracker:
             "positions": [],
             "bounding_boxes": [],
             "confidence_scores": [],
-            "frame_numbers": []
+            "frame_numbers": [],
+            "keypoints_sequence": [],  # Store keypoints over time
+            "keypoints_conf_sequence": []
         })
         
         for detection in all_detections:
@@ -251,10 +252,11 @@ class PlayerTracker:
             tracks_dict[track_id]["bounding_boxes"].append(detection["bbox"])
             tracks_dict[track_id]["confidence_scores"].append(detection["confidence"])
             tracks_dict[track_id]["frame_numbers"].append(detection["frame_number"])
+            tracks_dict[track_id]["keypoints_sequence"].append(detection.get("keypoints"))
+            tracks_dict[track_id]["keypoints_conf_sequence"].append(detection.get("keypoints_conf"))
         
         # Convert to list format and filter short tracks
-        # Use a very short minimum to catch all 4 players even if briefly visible
-        min_track_length = 3  # Very low to ensure we catch all players
+        min_track_length = 3  # Minimum frames to be considered a valid track
         all_tracks = []
         
         for track_id, track_data in tracks_dict.items():
@@ -303,9 +305,36 @@ class PlayerTracker:
         field_info: Dict[str, Any]
     ) -> List[Dict[str, Any]]:
         """
-        Assign players to teams based on their positions on the court.
-        For padel: court is divided by a net in the middle (horizontally).
-        Two players on each side of the net form a team.
+        Assign players to teams based on court position and optionally shirt color from keypoints.
+        Hybrid approach:
+        1. Primary: Court position (net divides teams)
+        2. Secondary (if keypoints available): Shirt color clustering
+        
+        Args:
+            player_tracks: List of player tracking data
+            field_info: Field information for court context
+            
+        Returns:
+            Updated player tracks with team assignments
+        """
+        # Try intelligent team assignment with keypoints first
+        if self.config.tracking.use_keypoints_for_team:
+            team_assigned = self._assign_teams_by_color(player_tracks)
+            if team_assigned:
+                logger.info("Team assignment: Using shirt color from keypoints")
+                return player_tracks
+        
+        # Fallback: Position-based team assignment
+        logger.info("Team assignment: Using court position (fallback)")
+        return self._assign_teams_by_position(player_tracks, field_info)
+    
+    def _assign_teams_by_position(
+        self, 
+        player_tracks: List[Dict[str, Any]], 
+        field_info: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
+        """
+        Assign teams based on Y-position (net divides court horizontally).
         
         Args:
             player_tracks: List of player tracking data
@@ -384,6 +413,27 @@ class PlayerTracker:
         logger.info(f"Team A: {len(team_a_ids)} players {team_a_ids}, Team B: {len(team_b_ids)} players {team_b_ids}")
         
         return player_tracks
+    
+    def _assign_teams_by_color(self, player_tracks: List[Dict[str, Any]]) -> bool:
+        """
+        Assign teams based on shirt color extracted from torso keypoints.
+        Uses k-means clustering to identify two dominant colors.
+        
+        Args:
+            player_tracks: List of player tracking data with keypoints
+            
+        Returns:
+            True if successful, False if not enough data
+        """
+        # This is a placeholder for future implementation
+        # Requires:
+        # 1. Extract torso region using shoulder/hip keypoints
+        # 2. Sample dominant color from torso
+        # 3. Cluster players into 2 groups by color
+        # 4. Assign teams based on clusters
+        
+        logger.debug("Color-based team assignment not yet implemented")
+        return False
 
 
 # Import cv2 here to avoid circular imports at module level
