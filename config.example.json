@@ -18,9 +18,8 @@
     "auto_calibrate": true
   },
   "model": {
-    "player_model": "yolov8n",
-    "ball_model": "custom_ball_detector",
-    "field_model": "segmentation_model",
+    "player_model": "yolov8n.pt",
+    "ball_model": "yolov8n.pt",
     "device": "auto",
     "batch_size": 1
   }
