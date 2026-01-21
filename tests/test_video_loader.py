@@ -5,8 +5,8 @@ Tests for the VideoLoader class.
 import pytest
 import tempfile
 from pathlib import Path
-from padel_analyzer.video.video_loader import VideoLoader
-from padel_analyzer.utils.config import Config
+from src.video.video_loader import VideoLoader
+from src.utils.config import Config
 
 
 class TestVideoLoader:

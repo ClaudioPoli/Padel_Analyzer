@@ -4,8 +4,8 @@ Tests for the PadelAnalyzer main class.
 
 import pytest
 from pathlib import Path
-from padel_analyzer import PadelAnalyzer
-from padel_analyzer.utils.config import Config
+from src import PadelAnalyzer
+from src.utils.config import Config
 
 
 class TestPadelAnalyzer:

@@ -6,7 +6,7 @@ import pytest
 import json
 import tempfile
 from pathlib import Path
-from padel_analyzer.utils.config import Config, VideoConfig, TrackingConfig
+from src.utils.config import Config, VideoConfig, TrackingConfig
 
 
 class TestConfig:
