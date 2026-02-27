@@ -18,6 +18,16 @@
     "use_homography": true,
     "auto_calibrate": true
   },
+  "field_keypoints": {
+    "enabled": true,
+    "model_path": "models/field_skeleton_yolo11m_pose5/weights/best.pt",
+    "min_keypoint_confidence": 0.5,
+    "min_detection_confidence": 0.25,
+    "interpolate_missing": true,
+    "temporal_smoothing": true,
+    "smoothing_window": 5,
+    "num_sample_frames": 10
+  },
   "model": {
     "player_model": "yolov8n.pt",
     "ball_model": "yolov8n.pt",

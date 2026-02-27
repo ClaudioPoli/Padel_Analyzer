@@ -37,6 +37,19 @@ class FieldDetectionConfig:
 
 
 @dataclass
+class FieldKeypointsConfig:
+    """Configuration for YOLO-pose based field keypoints detection."""
+    enabled: bool = True  # Use keypoints-based detection instead of legacy
+    model_path: str = "models/field_skeleton_yolo11m_pose5/weights/best.pt"
+    min_keypoint_confidence: float = 0.5  # Min confidence to trust a keypoint
+    min_detection_confidence: float = 0.25  # Min box detection confidence
+    interpolate_missing: bool = True  # Use geometric interpolation for low-confidence kpts
+    temporal_smoothing: bool = True  # Smooth keypoints across frames in video
+    smoothing_window: int = 5  # Number of frames for temporal smoothing
+    num_sample_frames: int = 10  # Number of frames to sample for static detection
+
+
+@dataclass
 class ModelConfig:
     """Model configuration."""
     player_model: str = "yolov8n.pt"  # Model name or path for detection
@@ -91,6 +104,7 @@ class Config:
     video: VideoConfig = field(default_factory=VideoConfig)
     tracking: TrackingConfig = field(default_factory=TrackingConfig)
     field_detection: FieldDetectionConfig = field(default_factory=FieldDetectionConfig)
+    field_keypoints: FieldKeypointsConfig = field(default_factory=FieldKeypointsConfig)
     model: ModelConfig = field(default_factory=ModelConfig)
     pose: PoseConfig = field(default_factory=PoseConfig)
     action_recognition: ActionRecognitionConfig = field(default_factory=ActionRecognitionConfig)
@@ -103,6 +117,8 @@ class Config:
             self.tracking = TrackingConfig(**self.tracking)
         if isinstance(self.field_detection, dict):
             self.field_detection = FieldDetectionConfig(**self.field_detection)
+        if isinstance(self.field_keypoints, dict):
+            self.field_keypoints = FieldKeypointsConfig(**self.field_keypoints)
         if isinstance(self.model, dict):
             self.model = ModelConfig(**self.model)
         if isinstance(self.pose, dict):
@@ -136,6 +152,7 @@ class Config:
             'video': self.video.__dict__,
             'tracking': self.tracking.__dict__,
             'field_detection': self.field_detection.__dict__,
+            'field_keypoints': self.field_keypoints.__dict__,
             'model': self.model.__dict__,
             'pose': self.pose.__dict__,
             'action_recognition': self.action_recognition.__dict__
