@@ -12,6 +12,7 @@ from .tracking.ball_tracker import BallTracker
 from .tracking.pose_estimator import PoseEstimator
 from .tracking.action_recognizer import ActionRecognizer, PadelAction
 from .detection.field_detector import FieldDetector
+from .detection.keypoint_field_detector import KeypointFieldDetector
 from .utils.config import Config
 
 logger = logging.getLogger(__name__)
@@ -39,7 +40,15 @@ class PadelAnalyzer:
         """
         self.config = config or Config()
         self.video_loader = VideoLoader(self.config)
-        self.field_detector = FieldDetector(self.config)
+        
+        # Field detector: prefer keypoint-based if enabled
+        if self.config.field_keypoints.enabled:
+            self.field_detector = KeypointFieldDetector(self.config)
+            logger.info("Using keypoint-based field detection")
+        else:
+            self.field_detector = FieldDetector(self.config)
+            logger.info("Using legacy field detection")
+        
         self.player_tracker = PlayerTracker(self.config)
         self.ball_tracker = BallTracker(self.config)
         
