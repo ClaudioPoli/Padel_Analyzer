@@ -1,6 +1,6 @@
 # folders
 data/
-models/custom/  # Custom trained models (gitignored, but keep pretrained/)
+models/
 
 # Model files (downloaded by ultralytics)
 *.pt
