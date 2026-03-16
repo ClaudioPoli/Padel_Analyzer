@@ -65,6 +65,9 @@ class HeatmapGenerator:
         self.grid_w = int((self.x_max - self.x_min) * self.res)
         self.grid_h = int((self.y_max - self.y_min) * self.res)
 
+        # Pre-compute a binary court mask on the grid to clip heatmap to court
+        self._court_mask = self._build_court_mask()
+
         logger.info(
             f"HeatmapGenerator initialized: grid {self.grid_w}x{self.grid_h}, "
             f"sigma={hm.sigma}m, padding={self.pad}m"
@@ -144,6 +147,7 @@ class HeatmapGenerator:
             grid = self._accumulate(pts)
             if sigma_px > 0:
                 grid = self._smooth(grid, sigma_px)
+            grid *= self._court_mask  # clip to court boundaries
             if hm_cfg.normalize and grid.max() > 0:
                 grid = grid / grid.max()
             per_player[pid] = grid
@@ -170,6 +174,7 @@ class HeatmapGenerator:
             for team, grid in team_grids.items():
                 if sigma_px > 0:
                     grid = self._smooth(grid, sigma_px)
+                grid *= self._court_mask  # clip to court boundaries
                 if hm_cfg.normalize and grid.max() > 0:
                     grid = grid / grid.max()
                 per_team[team] = grid
@@ -181,6 +186,7 @@ class HeatmapGenerator:
         global_grid = self._accumulate(all_pts)
         if sigma_px > 0:
             global_grid = self._smooth(global_grid, sigma_px)
+        global_grid *= self._court_mask  # clip to court boundaries
         if hm_cfg.normalize and global_grid.max() > 0:
             global_grid = global_grid / global_grid.max()
 
@@ -407,7 +413,9 @@ class HeatmapGenerator:
         Transform a pixel coordinate to real-world court coordinate
         using the homography matrix (image → real-world).
 
-        Returns None if the projected point is far outside the court bounds.
+        Returns None if the projected point is outside the court bounds
+        (with a small tolerance for players standing near the walls).
+        Points inside the tolerance band are clamped to the court edges.
         """
         pt = np.array([px, py, 1.0], dtype=np.float64)
         projected = H @ pt
@@ -416,13 +424,21 @@ class HeatmapGenerator:
         x = projected[0] / projected[2]
         y = projected[1] / projected[2]
 
-        # Reject points far outside the padded court
-        margin = 2.0  # extra tolerance in meters
-        if (x < self.x_min - margin or x > self.x_max + margin or
-                y < self.y_min - margin or y > self.y_max + margin):
+        # Court physical limits
+        cx_min, cx_max = -COURT_WIDTH / 2, COURT_WIDTH / 2
+        cy_min, cy_max = -COURT_LENGTH / 2, COURT_LENGTH / 2
+
+        # Small tolerance: players can stand right at the glass walls
+        tolerance = 0.5  # meters
+        if (x < cx_min - tolerance or x > cx_max + tolerance or
+                y < cy_min - tolerance or y > cy_max + tolerance):
             return None
 
-        return (float(x), float(y))
+        # Clamp to court boundaries
+        x = float(np.clip(x, cx_min, cx_max))
+        y = float(np.clip(y, cy_min, cy_max))
+
+        return (x, y)
 
     def _court_to_pixel(
         self, H_inv: np.ndarray, cx: float, cy: float
@@ -448,6 +464,39 @@ class HeatmapGenerator:
             if 0 <= gx < self.grid_w and 0 <= gy < self.grid_h:
                 grid[gy, gx] += 1.0
         return grid
+
+    def _build_court_mask(self) -> np.ndarray:
+        """
+        Build a binary mask (0/1 float) on the heatmap grid marking cells
+        that fall inside the court rectangle [-5,5] x [-10,10].
+
+        The mask has soft edges via a small Gaussian blur so the heatmap
+        fades out smoothly at the boundary rather than having hard cuts.
+        """
+        mask = np.zeros((self.grid_h, self.grid_w), dtype=np.float64)
+        cx_min, cx_max = -COURT_WIDTH / 2, COURT_WIDTH / 2
+        cy_min, cy_max = -COURT_LENGTH / 2, COURT_LENGTH / 2
+
+        gx0 = int((cx_min - self.x_min) * self.res)
+        gx1 = int((cx_max - self.x_min) * self.res)
+        gy0 = int((cy_min - self.y_min) * self.res)
+        gy1 = int((cy_max - self.y_min) * self.res)
+
+        gx0 = max(0, gx0)
+        gx1 = min(self.grid_w, gx1)
+        gy0 = max(0, gy0)
+        gy1 = min(self.grid_h, gy1)
+
+        mask[gy0:gy1, gx0:gx1] = 1.0
+
+        # Soft edge: small blur so the heatmap fades at boundaries
+        edge_blur = max(int(self.res * 0.3) | 1, 3)
+        mask = cv2.GaussianBlur(mask, (edge_blur, edge_blur), edge_blur / 3.0)
+        # Re-normalize so the interior stays at 1.0
+        if mask.max() > 0:
+            mask = np.clip(mask / mask.max(), 0, 1)
+
+        return mask
 
     def _smooth(self, grid: np.ndarray, sigma_px: float) -> np.ndarray:
         """Apply Gaussian smoothing to the density grid."""
