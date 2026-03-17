@@ -47,5 +47,18 @@
     "model_path": null,
     "buffer_size": 16,
     "min_action_confidence": 0.5
+  },
+  "heatmap": {
+    "enabled": true,
+    "resolution": 100,
+    "sigma": 0.5,
+    "use_feet_position": true,
+    "per_player": true,
+    "per_team": true,
+    "colormap": "jet",
+    "court_padding": 1.0,
+    "alpha": 0.6,
+    "output_width": 600,
+    "normalize": true
   }
 }

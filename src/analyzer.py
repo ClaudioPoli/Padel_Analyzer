@@ -13,6 +13,7 @@ from .tracking.pose_estimator import PoseEstimator
 from .tracking.action_recognizer import ActionRecognizer, PadelAction
 from .detection.field_detector import FieldDetector
 from .detection.keypoint_field_detector import KeypointFieldDetector
+from .analytics.heatmap_generator import HeatmapGenerator
 from .utils.config import Config
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,12 @@ class PadelAnalyzer:
             self.action_recognizer = ActionRecognizer(self.config)
             logger.info("Action recognition enabled")
         
+        # Initialize heatmap generator if enabled
+        self.heatmap_generator = None
+        if self.config.heatmap.enabled:
+            self.heatmap_generator = HeatmapGenerator(self.config)
+            logger.info("Heatmap generation enabled")
+        
     def analyze_video(self, video_path: str) -> Dict[str, Any]:
         """
         Analyze a padel match video.
@@ -106,12 +113,20 @@ class PadelAnalyzer:
                     video_data, player_tracks
                 )
             
+            # Generate heatmaps
+            heatmap_data = {}
+            if self.heatmap_generator is not None and self.config.heatmap.enabled:
+                heatmap_data = self.heatmap_generator.generate(
+                    player_tracks, field_info
+                )
+            
             return {
                 "field_info": field_info,
                 "player_tracks": player_tracks,
                 "ball_tracks": ball_tracks,
                 "pose_data": pose_data,
                 "actions": actions,
+                "heatmap_data": heatmap_data,
                 "metadata": video_data.get("metadata", {})
             }
         finally:

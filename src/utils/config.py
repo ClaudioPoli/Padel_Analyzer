@@ -94,6 +94,27 @@ class ActionRecognitionConfig:
 
 
 @dataclass
+class HeatmapConfig:
+    """
+    Heatmap generation configuration.
+    
+    Controls how player position heatmaps are generated and rendered.
+    Uses field keypoints + homography to map player positions to real court coordinates.
+    """
+    enabled: bool = True  # Enable heatmap generation
+    resolution: int = 100  # Grid cells per meter (higher = finer detail)
+    sigma: float = 0.5  # Gaussian smoothing sigma in meters
+    use_feet_position: bool = True  # Use bottom-center of bbox (feet) instead of center
+    per_player: bool = True  # Generate per-player heatmaps
+    per_team: bool = True  # Generate per-team heatmaps
+    colormap: str = "jet"  # Matplotlib/OpenCV colormap name
+    court_padding: float = 1.0  # Extra meters around court edges
+    alpha: float = 0.6  # Overlay transparency (0=transparent, 1=opaque)
+    output_width: int = 600  # Width of rendered court diagram in pixels
+    normalize: bool = True  # Normalize heatmap values to [0, 1]
+
+
+@dataclass
 class Config:
     """
     Main configuration class for Padel Analyzer.
@@ -108,6 +129,7 @@ class Config:
     model: ModelConfig = field(default_factory=ModelConfig)
     pose: PoseConfig = field(default_factory=PoseConfig)
     action_recognition: ActionRecognitionConfig = field(default_factory=ActionRecognitionConfig)
+    heatmap: HeatmapConfig = field(default_factory=HeatmapConfig)
     
     def __post_init__(self):
         """Initialize nested configs if they're dictionaries."""
@@ -125,6 +147,8 @@ class Config:
             self.pose = PoseConfig(**self.pose)
         if isinstance(self.action_recognition, dict):
             self.action_recognition = ActionRecognitionConfig(**self.action_recognition)
+        if isinstance(self.heatmap, dict):
+            self.heatmap = HeatmapConfig(**self.heatmap)
     
     @classmethod
     def from_file(cls, config_path: str) -> 'Config':
@@ -155,7 +179,8 @@ class Config:
             'field_keypoints': self.field_keypoints.__dict__,
             'model': self.model.__dict__,
             'pose': self.pose.__dict__,
-            'action_recognition': self.action_recognition.__dict__
+            'action_recognition': self.action_recognition.__dict__,
+            'heatmap': self.heatmap.__dict__
         }
         with open(config_path, 'w') as f:
             json.dump(config_dict, f, indent=2)
