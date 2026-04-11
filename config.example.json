@@ -10,7 +10,15 @@
     "max_tracking_distance": 100,
     "interpolate_missing": true,
     "max_interpolation_gap": 5,
-    "use_keypoints_for_team": false
+    "use_keypoints_for_team": false,
+    "identity_history_len": 30,
+    "identity_init_frames": 5,
+    "occlusion_iou_threshold": 0.10,
+    "lost_player_max_frames": 60,
+    "swap_penalty": 150.0,
+    "appearance_cost_weight": 250.0,
+    "kalman_process_noise": 5.0,
+    "kalman_measurement_noise": 10.0
   },
   "field_detection": {
     "line_detection_threshold": 100,

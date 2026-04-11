@@ -25,6 +25,15 @@ class TrackingConfig:
     interpolate_missing: bool = True
     max_interpolation_gap: int = 5  # frames
     use_keypoints_for_team: bool = False  # Use keypoints for team assignment
+    # --- Identity stabilization parameters ---
+    identity_history_len: int = 30  # frames of position/bbox history per player
+    identity_init_frames: int = 5  # frames to collect before assigning stable IDs
+    occlusion_iou_threshold: float = 0.10  # bbox IoU above which players are "occluding"
+    lost_player_max_frames: int = 60  # keep predicting lost player for N frames
+    swap_penalty: float = 150.0  # extra cost for swapping two overlapping players
+    appearance_cost_weight: float = 250.0  # scale appearance dissimilarity
+    kalman_process_noise: float = 5.0  # Kalman filter process noise
+    kalman_measurement_noise: float = 10.0  # Kalman filter measurement noise
 
 
 @dataclass

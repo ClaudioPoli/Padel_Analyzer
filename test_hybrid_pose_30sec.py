@@ -19,7 +19,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 
 from src.utils.config import Config
-from src.tracking.player_tracker import PlayerTracker
+from src.tracking.player_tracker import PlayerTracker, PlayerIdentityManager
 from src.tracking.pose_estimator import KEYPOINT_NAMES, SKELETON_CONNECTIONS
 
 
@@ -68,7 +68,14 @@ def draw_player_tracks_with_poses(frame, player_tracks, frame_idx):
         player_tracks: List of player track dictionaries
         frame_idx: Current frame index
     """
-    colors = [
+    # Team A = blue tones, Team B = red tones
+    team_colors = {
+        1: (255, 100, 0),   # Blue-ish  (Player 1, Team A)
+        2: (255, 200, 0),   # Cyan-ish  (Player 2, Team A)
+        3: (0, 0, 255),     # Red       (Player 3, Team B)
+        4: (0, 100, 255),   # Orange    (Player 4, Team B)
+    }
+    fallback_colors = [
         (255, 0, 0),    # Blue
         (0, 255, 0),    # Green
         (0, 0, 255),    # Red
@@ -76,7 +83,9 @@ def draw_player_tracks_with_poses(frame, player_tracks, frame_idx):
     ]
     
     for i, track in enumerate(player_tracks):
-        color = colors[i % len(colors)]
+        player_id = track["player_id"]
+        team = track.get("team", "?")
+        color = team_colors.get(player_id, fallback_colors[i % len(fallback_colors)])
         
         # Find the detection for this frame
         try:
@@ -88,11 +97,11 @@ def draw_player_tracks_with_poses(frame, player_tracks, frame_idx):
                 bbox = track["bounding_boxes"][idx_in_track]
                 cv2.rectangle(frame, (bbox[0], bbox[1]), (bbox[2], bbox[3]), color, 2)
                 
-                # Draw player ID
-                player_id = track["player_id"]
+                # Draw player ID and team
+                label = f"P{player_id} Team {team}"
                 cv2.putText(
                     frame,
-                    f"Player {player_id}",
+                    label,
                     (bbox[0], bbox[1] - 10),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.6,
@@ -184,12 +193,14 @@ def process_video(video_path, output_dir, config, duration_seconds=30):
     }
     
     # Track players with poses - process frames directly
-    print("\nTracking players with pose estimation...")
+    print("\nTracking players with pose estimation (with identity stabilization)...")
     start_time = time.time()
     
+    identity_mgr = PlayerIdentityManager(max_players=4)
     all_detections = []
     for frame_idx, frame in enumerate(frames):
         detections = tracker.detect_players_in_frame(frame, frame_idx, field_mask=None)
+        detections = identity_mgr.update(frame, detections)
         all_detections.extend(detections)
         
         if (frame_idx + 1) % 100 == 0:
