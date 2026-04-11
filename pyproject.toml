@@ -60,7 +60,7 @@ Homepage = "https://github.com/ClaudioPoli/Padel_Analyzer"
 Repository = "https://github.com/ClaudioPoli/Padel_Analyzer"
 
 [tool.setuptools.packages.find]
-include = ["padel_analyzer*"]
+include = ["src*"]
 
 [tool.black]
 line-length = 100
