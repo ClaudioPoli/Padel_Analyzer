@@ -515,11 +515,7 @@ class ActionRecognizer:
                 "confidence": 0.0,
                 "details": {"reason": "insufficient_sequence_length"}
             }
-        
-        # TODO: Implement ML-based classification
-        # 1. Prepare input tensor from pose sequence
-        # 2. Run inference
-        # 3. Return classified action
+
         
         return {
             "action": PadelAction.UNKNOWN,

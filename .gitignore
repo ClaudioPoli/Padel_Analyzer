@@ -2,6 +2,7 @@
 data/
 models/
 runs/
+.superset/
 
 # Model files (downloaded by ultralytics)
 *.pt
